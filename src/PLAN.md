@@ -36,7 +36,7 @@ D3a:
 - Create new token with doubled value after successful merge
 - Handle edge cases - empty cells, unequal values, etc
 
-6.[ ] Interaction Range & Game Logic
+6.[X] Interaction Range & Game Logic
 
 - Implement proximity system - only interact with cells within 3 tiles
 - Add victory condition detection - track high-value tokens

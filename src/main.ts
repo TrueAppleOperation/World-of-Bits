@@ -139,6 +139,64 @@ function validateMapInitialized(): void {
 }
 
 // =============================================
+// INTERACTION RANGE & GAME LOGIC ENHANCEMENTS
+// =============================================
+
+function updateInteractionRangeDisplay(): void {
+  for (const cell of gameState.grid.values()) {
+    if (cell.element) {
+      updateCellVisualization(cell);
+    }
+  }
+}
+
+function _getInteractionRangeBounds(): leaflet.LatLngBounds {
+  const origin = CONFIG.CLASSROOM_LOCATION;
+  return leaflet.latLngBounds([
+    [
+      origin.lat - CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
+      origin.lng - CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
+    ],
+    [
+      origin.lat + CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
+      origin.lng + CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
+    ],
+  ]);
+}
+
+function showVictoryMessage(): void {
+  if (gameState.isVictoryAchieved) {
+    // Victory feedback
+    const statusPanel = getElementOrThrow("statusPanel");
+    statusPanel.innerHTML = `🎉 VICTORY ACHIEVED! 🎉<br>` +
+      `Final Score: ${gameState.player.points} points<br>` +
+      `You created a token with value ${CONFIG.VICTORY_THRESHOLD}+!`;
+
+    statusPanel.style.color = "green";
+    statusPanel.style.fontWeight = "bold";
+    statusPanel.style.fontSize = "1.2em";
+    statusPanel.style.textAlign = "center";
+
+    console.log("🎊 VICTORY CELEBRATION! 🎊");
+  }
+}
+
+function getHighestTokenValue(): number {
+  let highest = 0;
+  for (const cell of gameState.grid.values()) {
+    if (cell.token && cell.token.value > highest) {
+      highest = cell.token.value;
+    }
+  }
+  if (
+    gameState.player.inventory && gameState.player.inventory.value > highest
+  ) {
+    highest = gameState.player.inventory.value;
+  }
+  return highest;
+}
+
+// =============================================
 // CRAFTING & MERGING MECHANICS
 // =============================================
 
@@ -190,11 +248,7 @@ function checkVictoryCondition(newToken: Token): void {
     newToken.value >= CONFIG.VICTORY_THRESHOLD && !gameState.isVictoryAchieved
   ) {
     gameState.isVictoryAchieved = true;
-    console.log(
-      `🎉 VICTORY ACHIEVED! Created token with value ${newToken.value}`,
-    );
     updateUI();
-
     // Show victory message
     const statusPanel = getElementOrThrow("statusPanel");
     statusPanel.innerHTML += ` 🎉 VICTORY!`;
@@ -465,11 +519,11 @@ function createTooltipContent(cell: GridCell): string {
   }
 
   if (hasToken(cell) && cell.token) {
-    return `Value: ${cell.token.value}`;
+    return `${cell.token.value}`;
   }
 
   if (isPlayerHoldingToken() && isCellInteractable(cell)) {
-    return `Drop token here (${cell.i},${cell.j})`;
+    return ``;
   }
 
   return `Cell (${cell.i},${cell.j})`;
@@ -679,10 +733,22 @@ function handleCellClick(cell: GridCell) {
     console.log(`Token in cell:`, cell.token);
     console.log(`Player inventory:`, gameState.player.inventory);
     console.log(`Interactable: ${isCellInteractable(cell)}`);
+    console.log(
+      `Distance from player: ${Math.max(Math.abs(cell.i), Math.abs(cell.j))}`,
+    );
 
     if (!isCellInteractable(cell)) {
       console.log("Cell is not in interaction range");
       provideVisualFeedback(cell, "outOfRange");
+
+      // Show range information to player
+      const statusPanel = getElementOrThrow("statusPanel");
+      const originalText = statusPanel.textContent;
+      statusPanel.textContent =
+        "Too far! You can only interact with cells within 3 tiles.";
+      setTimeout(() => {
+        statusPanel.textContent = originalText;
+      }, 2000);
       return;
     }
 
@@ -709,6 +775,11 @@ function handleCellClick(cell: GridCell) {
     }
 
     provideVisualFeedback(cell, action);
+
+    // Update interaction range display
+    if (success) {
+      updateInteractionRangeDisplay();
+    }
   } catch (error) {
     console.error("Error handling cell click:", error);
     provideVisualFeedback(cell, "invalid");
@@ -784,19 +855,24 @@ function updateUI() {
   try {
     const statusPanel = getElementOrThrow("statusPanel");
 
-    let statusText =
-      `Points: ${gameState.player.points} | Goal: Reach value ${gameState.victoryCondition}`;
-
     if (gameState.isVictoryAchieved) {
-      statusText += " 🎉 VICTORY!";
-      statusPanel.style.color = "green";
-      statusPanel.style.fontWeight = "bold";
+      showVictoryMessage();
     } else {
+      let statusText = `Points: ${gameState.player.points} | ` +
+        `Goal: Create a ${CONFIG.VICTORY_THRESHOLD} token | ` +
+        `Range: ${CONFIG.INTERACTION_RANGE} cells`;
+
+      const highestToken = getHighestTokenValue();
+      if (highestToken > 4) {
+        statusText += ` | Highest: ${highestToken}`;
+      }
+
+      statusPanel.innerHTML = statusText;
       statusPanel.style.color = "";
       statusPanel.style.fontWeight = "normal";
+      statusPanel.style.fontSize = "";
+      statusPanel.style.textAlign = "";
     }
-
-    statusPanel.textContent = statusText;
   } catch (error) {
     console.error("Failed to update UI:", error);
   }
@@ -807,8 +883,6 @@ function updateUI() {
 // =============================================
 
 function initializeGame() {
-  console.log("Initializing Pokemon Fusion Game...");
-
   initializeDOM();
   map = initializeMap();
   initializeGridSystem();
@@ -819,7 +893,6 @@ function initializeGame() {
 
   updateInventoryDisplay();
 
-  console.log("Phase 5 Complete: Token crafting mechanics implemented!");
   updateUI();
 }
 
