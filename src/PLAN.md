@@ -22,7 +22,7 @@ D3a:
 - Ensure consistency across page loads using same seeding mechanism
 - Configure initial token distribution with appropriate values
 
-4.[ ] Player Inventory System
+4.[X] Player Inventory System
 
 - Create inventory display showing current held token (value and visibility)
 - Pickup mechanic - click empty cell with token to collect

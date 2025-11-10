@@ -79,10 +79,17 @@ const CONFIG = {
       weight: 2,
       fillOpacity: 0.2,
     } as CellStyle,
+    // New style for when player is holding a token
+    holdingToken: {
+      color: "#ffaa00",
+      weight: 3,
+      fillOpacity: 0.4,
+    } as CellStyle,
   },
   UI: {
     HIGHLIGHT_DURATION_MS: 500,
     TOOLTIP_CLASS: "cell-tooltip",
+    INVENTORY_CLASS: "inventory-display",
   },
 } as const;
 
@@ -126,6 +133,84 @@ function validateMapInitialized(): void {
 }
 
 // =============================================
+// INVENTORY MANAGEMENT
+// =============================================
+
+function canPickupToken(cell: GridCell): boolean {
+  return isCellInteractable(cell) &&
+    hasToken(cell) &&
+    gameState.player.inventory === null;
+}
+
+function pickupTokenFromCell(cell: GridCell): void {
+  if (!canPickupToken(cell)) {
+    console.warn("Cannot pickup token from cell:", cell);
+    return;
+  }
+
+  // Move token from cell to player inventory
+  gameState.player.inventory = cell.token;
+  cell.token = null;
+
+  // Update visuals
+  updateCellVisualization(cell);
+  updateInventoryDisplay();
+
+  console.log(
+    `Picked up token (value: ${
+      gameState.player.inventory!.value
+    }) from cell (${cell.i}, ${cell.j})`,
+  );
+}
+
+function dropTokenToCell(cell: GridCell): boolean {
+  if (!isCellInteractable(cell) || gameState.player.inventory === null) {
+    return false;
+  }
+
+  // Place token in cell
+  cell.token = gameState.player.inventory;
+  gameState.player.inventory = null;
+
+  // Update visuals
+  updateCellVisualization(cell);
+  updateInventoryDisplay();
+
+  console.log(
+    `Dropped token (value: ${
+      cell.token!.value
+    }) to cell (${cell.i}, ${cell.j})`,
+  );
+  return true;
+}
+
+function getInventoryDisplayText(): string {
+  const inventory = gameState.player.inventory;
+  if (!inventory) {
+    return "Inventory: Empty";
+  }
+  return `Inventory: Token (Value: ${inventory.value})`;
+}
+
+function updateInventoryDisplay(): void {
+  try {
+    const inventoryDisplay = getElementOrThrow("inventoryDisplay");
+    inventoryDisplay.textContent = getInventoryDisplayText();
+
+    // Add visual feedback when holding a token
+    if (gameState.player.inventory) {
+      inventoryDisplay.style.fontWeight = "bold";
+      inventoryDisplay.style.color = "#ffaa00";
+    } else {
+      inventoryDisplay.style.fontWeight = "normal";
+      inventoryDisplay.style.color = "";
+    }
+  } catch (error) {
+    console.error("Failed to update inventory display:", error);
+  }
+}
+
+// =============================================
 // TOKEN SPAWNING LOGIC
 // =============================================
 
@@ -143,7 +228,6 @@ function shouldSpawnToken(i: number, j: number): boolean {
 }
 
 function determineTokenValue(i: number, j: number): number {
-  // Use a different seed for value determination to ensure independence
   const valueSeed = `${i},${j},value`;
   const valueRoll = luck(valueSeed);
 
@@ -231,8 +315,12 @@ function hasToken(cell: GridCell): boolean {
   return cell.token !== null;
 }
 
-function shouldHighlightCell(cell: GridCell): boolean {
-  return isCellInteractable(cell) && hasToken(cell);
+function isPlayerHoldingToken(): boolean {
+  return gameState.player.inventory !== null;
+}
+
+function _shouldHighlightCell(cell: GridCell): boolean {
+  return isCellInteractable(cell) && (hasToken(cell) || isPlayerHoldingToken());
 }
 
 function shouldRenderCell(i: number, j: number): boolean {
@@ -256,6 +344,11 @@ function getCellStyle(cell: GridCell): CellStyle {
     Object.assign(baseStyle, CONFIG.CELL_STYLES.interactable);
   }
 
+  // Highlight cells differently when player is holding a token
+  if (isPlayerHoldingToken() && isCellInteractable(cell)) {
+    Object.assign(baseStyle, CONFIG.CELL_STYLES.holdingToken);
+  }
+
   return baseStyle;
 }
 
@@ -263,16 +356,23 @@ function createTooltipContent(cell: GridCell): string {
   if (hasToken(cell) && cell.token) {
     return `Value: ${cell.token.value}`;
   }
+
+  if (isPlayerHoldingToken() && isCellInteractable(cell)) {
+    return `Drop token here (${cell.i},${cell.j})`;
+  }
+
   return `Cell (${cell.i},${cell.j})`;
 }
 
 function getTooltipOptions(cell: GridCell): leaflet.TooltipOptions {
   const hasCellToken = hasToken(cell);
+  const shouldShowPermanent = hasCellToken ||
+    (isPlayerHoldingToken() && isCellInteractable(cell));
 
   return {
-    permanent: hasCellToken,
+    permanent: shouldShowPermanent,
     direction: "center",
-    className: hasCellToken ? CONFIG.UI.TOOLTIP_CLASS : "",
+    className: shouldShowPermanent ? CONFIG.UI.TOOLTIP_CLASS : "",
   };
 }
 
@@ -304,10 +404,16 @@ function initializeDOM() {
   controlPanel.id = "controlPanel";
   controlPanel.innerHTML = `
         <h2>Pokemon Fusion Game</h2>
-        <div id="inventoryDisplay">Inventory: Empty</div>
+        <div id="inventoryDisplay" class="${CONFIG.UI.INVENTORY_CLASS}">Inventory: Empty</div>
         <div id="gameInstructions">
             <p>Click cells to collect and merge tokens!</p>
             <p>Goal: Create a token with value ${CONFIG.VICTORY_THRESHOLD}</p>
+            <p><strong>How to play:</strong></p>
+            <ul>
+                <li>Click a token cell to pick it up</li>
+                <li>Click an empty cell to drop your token</li>
+                <li>Merge tokens of equal value to create higher values</li>
+            </ul>
         </div>
     `;
   document.body.appendChild(controlPanel);
@@ -456,18 +562,48 @@ function handleCellClick(cell: GridCell) {
     validateCell(cell);
 
     console.log(`Cell clicked: (${cell.i}, ${cell.j})`);
-    console.log(`Token:`, cell.token);
+    console.log(`Token in cell:`, cell.token);
+    console.log(`Player inventory:`, gameState.player.inventory);
     console.log(`Interactable: ${isCellInteractable(cell)}`);
 
-    if (cell.element && shouldHighlightCell(cell)) {
-      cell.element.setStyle({ color: "#ffff00", weight: 3 });
-      setTimeout(() => {
-        updateCellVisualization(cell);
-      }, CONFIG.UI.HIGHLIGHT_DURATION_MS);
+    if (!isCellInteractable(cell)) {
+      console.log("Cell is not in interaction range");
+      return;
+    }
+
+    // Pickup logic: if cell has token and player has empty inventory
+    if (hasToken(cell) && !isPlayerHoldingToken()) {
+      pickupTokenFromCell(cell);
+      provideVisualFeedback(cell, "pickup");
+    } // Drop logic: if cell is empty and player has token
+    else if (!hasToken(cell) && isPlayerHoldingToken()) {
+      dropTokenToCell(cell);
+      provideVisualFeedback(cell, "drop");
+    } // Cannot pickup if already holding a token or cannot drop if cell has a token
+    else {
+      console.log("No valid action for this cell");
+      provideVisualFeedback(cell, "invalid");
     }
   } catch (error) {
     console.error("Error handling cell click:", error);
   }
+}
+
+function provideVisualFeedback(
+  cell: GridCell,
+  action: "pickup" | "drop" | "invalid",
+) {
+  if (!cell.element) return;
+
+  let feedbackColor = "#ffff00"; // Default yellow
+  if (action === "pickup") feedbackColor = "#00ff00";
+  if (action === "drop") feedbackColor = "#00ffff";
+  if (action === "invalid") feedbackColor = "#ff0000";
+
+  cell.element.setStyle({ color: feedbackColor, weight: 4 });
+  setTimeout(() => {
+    updateCellVisualization(cell);
+  }, CONFIG.UI.HIGHLIGHT_DURATION_MS);
 }
 
 // =============================================
@@ -503,13 +639,7 @@ function setupMapBoundaryHandling() {
 
 function updateUI() {
   try {
-    const inventoryDisplay = getElementOrThrow("inventoryDisplay");
     const statusPanel = getElementOrThrow("statusPanel");
-
-    const inventory = gameState.player.inventory;
-    inventoryDisplay.textContent = inventory
-      ? `Inventory: Token (Value: ${inventory.value})`
-      : "Inventory: Empty";
 
     statusPanel.textContent =
       `Points: ${gameState.player.points} | Goal: Reach value ${gameState.victoryCondition}`;
@@ -535,12 +665,12 @@ function initializeGame() {
   map = initializeMap();
   initializeGridSystem();
 
-  // Initialize token spawning after grid is set up
   initializeTokenSpawning();
 
   setupMapBoundaryHandling();
 
-  console.log("Phase 3 Complete: Deterministic token spawning implemented!");
+  updateInventoryDisplay();
+
   updateUI();
 }
 
