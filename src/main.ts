@@ -2,114 +2,202 @@
 import leaflet from "leaflet";
 
 // Style sheets
-import "leaflet/dist/leaflet.css"; // supporting style for Leaflet
-import "./style.css"; // student-controlled page style
+import "leaflet/dist/leaflet.css";
+import "./style.css";
 
 // Fix missing marker images
-import "./_leafletWorkaround.ts"; // fixes for missing Leaflet images
+import "./_leafletWorkaround.ts";
 
-// Import our luck function
-import luck from "./_luck.ts";
+// =============================================
+// CORE INTERFACES & TYPE DEFINITIONS
+// =============================================
 
-// Create basic UI elements
-
-const controlPanelDiv = document.createElement("div");
-controlPanelDiv.id = "controlPanel";
-document.body.append(controlPanelDiv);
-
-const mapDiv = document.createElement("div");
-mapDiv.id = "map";
-document.body.append(mapDiv);
-
-const statusPanelDiv = document.createElement("div");
-statusPanelDiv.id = "statusPanel";
-document.body.append(statusPanelDiv);
-
-// Our classroom location
-const CLASSROOM_LATLNG = leaflet.latLng(
-  36.997936938057016,
-  -122.05703507501151,
-);
-
-// Tunable gameplay parameters
-const GAMEPLAY_ZOOM_LEVEL = 19;
-const TILE_DEGREES = 1e-4;
-const NEIGHBORHOOD_SIZE = 8;
-const CACHE_SPAWN_PROBABILITY = 0.1;
-
-// Create the map (element with id "map" is defined in index.html)
-const map = leaflet.map(mapDiv, {
-  center: CLASSROOM_LATLNG,
-  zoom: GAMEPLAY_ZOOM_LEVEL,
-  minZoom: GAMEPLAY_ZOOM_LEVEL,
-  maxZoom: GAMEPLAY_ZOOM_LEVEL,
-  zoomControl: false,
-  scrollWheelZoom: false,
-});
-
-// Populate the map with a background tile layer
-leaflet
-  .tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  })
-  .addTo(map);
-
-// Add a marker to represent the player
-const playerMarker = leaflet.marker(CLASSROOM_LATLNG);
-playerMarker.bindTooltip("That's you!");
-playerMarker.addTo(map);
-
-// Display the player's points
-let playerPoints = 0;
-statusPanelDiv.innerHTML = "No points yet...";
-
-// Add caches to the map by cell numbers
-function spawnCache(i: number, j: number) {
-  // Convert cell numbers into lat/lng bounds
-  const origin = CLASSROOM_LATLNG;
-  const bounds = leaflet.latLngBounds([
-    [origin.lat + i * TILE_DEGREES, origin.lng + j * TILE_DEGREES],
-    [origin.lat + (i + 1) * TILE_DEGREES, origin.lng + (j + 1) * TILE_DEGREES],
-  ]);
-
-  // Add a rectangle to the map to represent the cache
-  const rect = leaflet.rectangle(bounds);
-  rect.addTo(map);
-
-  // Handle interactions with the cache
-  rect.bindPopup(() => {
-    // Each cache has a random point value, mutable by the player
-    let pointValue = Math.floor(luck([i, j, "initialValue"].toString()) * 100);
-
-    // The popup offers a description and button
-    const popupDiv = document.createElement("div");
-    popupDiv.innerHTML = `
-                <div>There is a cache here at "${i},${j}". It has value <span id="value">${pointValue}</span>.</div>
-                <button id="poke">poke</button>`;
-
-    // Clicking the button decrements the cache's value and increments the player's points
-    popupDiv
-      .querySelector<HTMLButtonElement>("#poke")!
-      .addEventListener("click", () => {
-        pointValue--;
-        popupDiv.querySelector<HTMLSpanElement>("#value")!.innerHTML =
-          pointValue.toString();
-        playerPoints++;
-        statusPanelDiv.innerHTML = `${playerPoints} points accumulated`;
-      });
-
-    return popupDiv;
-  });
+interface Token {
+  value: number;
 }
 
-// Look around the player's neighborhood for caches to spawn
-for (let i = -NEIGHBORHOOD_SIZE; i < NEIGHBORHOOD_SIZE; i++) {
-  for (let j = -NEIGHBORHOOD_SIZE; j < NEIGHBORHOOD_SIZE; j++) {
-    // If location i,j is lucky enough, spawn a cache!
-    if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-      spawnCache(i, j);
+interface GridCell {
+  i: number; // Grid coordinate i (latitude offset)
+  j: number; // Grid coordinate j (longitude offset)
+  token: Token | null;
+  bounds: leaflet.LatLngBounds;
+  element: leaflet.Rectangle | null;
+}
+
+interface GameState {
+  player: {
+    inventory: Token | null;
+    location: leaflet.LatLng;
+    points: number;
+  };
+  grid: Map<string, GridCell>;
+  victoryCondition: number;
+  isVictoryAchieved: boolean;
+}
+
+// =============================================
+// GAME CONSTANTS & CONFIGURATION
+// =============================================
+
+const CONFIG = {
+  CLASSROOM_LOCATION: leaflet.latLng(36.997936938057016, -122.05703507501151),
+  ZOOM_LEVEL: 19,
+  TILE_DEGREES: 1e-4,
+  INTERACTION_RANGE: 3,
+  VICTORY_THRESHOLD: 2048,
+  INITIAL_SPAWN_VALUES: [1, 2, 4],
+} as const;
+
+// =============================================
+// GLOBAL STATE
+// =============================================
+
+const gameState: GameState = {
+  player: {
+    inventory: null,
+    location: CONFIG.CLASSROOM_LOCATION,
+    points: 0,
+  },
+  grid: new Map<string, GridCell>(),
+  victoryCondition: CONFIG.VICTORY_THRESHOLD,
+  isVictoryAchieved: false,
+};
+
+gameState;
+
+// =============================================
+// DOM ELEMENT SETUP
+// =============================================
+
+function initializeDOM() {
+  // Clear any existing elements
+  document.body.innerHTML = "";
+
+  // Create control panel
+  const controlPanel = document.createElement("div");
+  controlPanel.id = "controlPanel";
+  controlPanel.innerHTML = `
+        <h2>Pokemon Fusion Game</h2>
+        <div id="inventoryDisplay">Inventory: Empty</div>
+    `;
+  document.body.appendChild(controlPanel);
+
+  // Create map container
+  const mapContainer = document.createElement("div");
+  mapContainer.id = "map";
+  document.body.appendChild(mapContainer);
+
+  // Create status panel
+  const statusPanel = document.createElement("div");
+  statusPanel.id = "statusPanel";
+  statusPanel.innerHTML = "Points: 0 | Goal: Reach value " +
+    CONFIG.VICTORY_THRESHOLD;
+  document.body.appendChild(statusPanel);
+}
+
+// =============================================
+// MAP INITIALIZATION
+// =============================================
+
+function initializeMap(): leaflet.Map {
+  const map = leaflet.map("map", {
+    center: CONFIG.CLASSROOM_LOCATION,
+    zoom: CONFIG.ZOOM_LEVEL,
+    minZoom: CONFIG.ZOOM_LEVEL,
+    maxZoom: CONFIG.ZOOM_LEVEL,
+    zoomControl: false,
+    scrollWheelZoom: false,
+  });
+
+  // Add background tiles
+  leaflet.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors",
+  }).addTo(map);
+
+  // Add player marker
+  const playerMarker = leaflet.marker(CONFIG.CLASSROOM_LOCATION);
+  playerMarker.bindTooltip("Your location");
+  playerMarker.addTo(map);
+
+  return map;
+}
+
+// =============================================
+// GRID SYSTEM UTILITIES
+// =============================================
+
+function generateCellKey(i: number, j: number): string {
+  return `${i},${j}`;
+}
+
+function calculateCellBounds(i: number, j: number): leaflet.LatLngBounds {
+  const origin = CONFIG.CLASSROOM_LOCATION;
+  return leaflet.latLngBounds([
+    [
+      origin.lat + i * CONFIG.TILE_DEGREES,
+      origin.lng + j * CONFIG.TILE_DEGREES,
+    ],
+    [
+      origin.lat + (i + 1) * CONFIG.TILE_DEGREES,
+      origin.lng + (j + 1) * CONFIG.TILE_DEGREES,
+    ],
+  ]);
+}
+
+function isWithinInteractionRange(cellI: number, cellJ: number): boolean {
+  const distance = Math.max(Math.abs(cellI), Math.abs(cellJ));
+  return distance <= CONFIG.INTERACTION_RANGE;
+}
+
+// =============================================
+// INITIALIZATION FUNCTION
+// =============================================
+
+function initializeGame() {
+  initializeDOM();
+
+  const map = initializeMap();
+  map;
+  updateUI();
+}
+
+// =============================================
+// UI UPDATE FUNCTIONS
+// =============================================
+
+function updateUI() {
+  // Update inventory display
+  const inventoryDisplay = document.getElementById("inventoryDisplay");
+  if (inventoryDisplay) {
+    const inventory = gameState.player.inventory;
+    inventoryDisplay.textContent = inventory
+      ? `Inventory: Token (Value: ${inventory.value})`
+      : "Inventory: Empty";
+  }
+
+  // Update status panel
+  const statusPanel = document.getElementById("statusPanel");
+  if (statusPanel) {
+    statusPanel.textContent =
+      `Points: ${gameState.player.points} | Goal: Reach value ${gameState.victoryCondition}`;
+
+    if (gameState.isVictoryAchieved) {
+      statusPanel.textContent += " - VICTORY!";
+      statusPanel.style.color = "green";
+      statusPanel.style.fontWeight = "bold";
     }
   }
 }
+
+// =============================================
+// GAME INITIALIZATION
+// =============================================
+
+initializeGame();
+
+console.log({
+  generateCellKey,
+  calculateCellBounds,
+  isWithinInteractionRange,
+});
