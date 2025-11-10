@@ -85,6 +85,12 @@ const CONFIG = {
       weight: 3,
       fillOpacity: 0.4,
     } as CellStyle,
+    // Style for cells that can be merged into
+    mergeTarget: {
+      color: "#aa00ff",
+      weight: 4,
+      fillOpacity: 0.5,
+    } as CellStyle,
   },
   UI: {
     HIGHLIGHT_DURATION_MS: 500,
@@ -133,6 +139,82 @@ function validateMapInitialized(): void {
 }
 
 // =============================================
+// CRAFTING & MERGING MECHANICS
+// =============================================
+
+function canMergeTokens(heldToken: Token, cellToken: Token): boolean {
+  return heldToken.value === cellToken.value;
+}
+
+function mergeTokens(heldToken: Token, cellToken: Token): Token {
+  const newValue = heldToken.value * 2;
+  console.log(
+    `Merging tokens: ${heldToken.value} + ${cellToken.value} = ${newValue}`,
+  );
+
+  // Award points based on the new token value
+  gameState.player.points += newValue;
+
+  return { value: newValue };
+}
+
+function attemptMerge(cell: GridCell): boolean {
+  if (!gameState.player.inventory || !cell.token) {
+    return false;
+  }
+
+  if (!canMergeTokens(gameState.player.inventory, cell.token)) {
+    return false;
+  }
+
+  // Perform the merge
+  const newToken = mergeTokens(gameState.player.inventory, cell.token);
+  cell.token = newToken;
+  gameState.player.inventory = null;
+
+  // Update visuals
+  updateCellVisualization(cell);
+  updateInventoryDisplay();
+  updateUI();
+
+  console.log(`Successfully merged tokens! New token value: ${newToken.value}`);
+
+  // Check for victory condition
+  checkVictoryCondition(newToken);
+
+  return true;
+}
+
+function checkVictoryCondition(newToken: Token): void {
+  if (
+    newToken.value >= CONFIG.VICTORY_THRESHOLD && !gameState.isVictoryAchieved
+  ) {
+    gameState.isVictoryAchieved = true;
+    console.log(
+      `🎉 VICTORY ACHIEVED! Created token with value ${newToken.value}`,
+    );
+    updateUI();
+
+    // Show victory message
+    const statusPanel = getElementOrThrow("statusPanel");
+    statusPanel.innerHTML += ` 🎉 VICTORY!`;
+  }
+}
+
+function getMergeTooltipContent(cell: GridCell): string {
+  if (!gameState.player.inventory || !cell.token) {
+    return createTooltipContent(cell);
+  }
+
+  if (canMergeTokens(gameState.player.inventory, cell.token)) {
+    const newValue = gameState.player.inventory.value * 2;
+    return `Merge: ${gameState.player.inventory.value} + ${cell.token.value} = ${newValue}`;
+  } else {
+    return `Cannot merge: ${gameState.player.inventory.value} ≠ ${cell.token.value}`;
+  }
+}
+
+// =============================================
 // INVENTORY MANAGEMENT
 // =============================================
 
@@ -168,7 +250,18 @@ function dropTokenToCell(cell: GridCell): boolean {
     return false;
   }
 
-  // Place token in cell
+  // If cell has a token, attempt merge instead of simple drop
+  if (cell.token) {
+    if (attemptMerge(cell)) {
+      return true;
+    } else {
+      // Cannot merge
+      console.log("Cannot merge tokens with different values");
+      return false;
+    }
+  }
+
+  // Simple drop to empty cell
   cell.token = gameState.player.inventory;
   gameState.player.inventory = null;
 
@@ -319,6 +412,17 @@ function isPlayerHoldingToken(): boolean {
   return gameState.player.inventory !== null;
 }
 
+function _canCellAcceptDrop(cell: GridCell): boolean {
+  return isCellInteractable(cell) && !hasToken(cell);
+}
+
+function isMergeTarget(cell: GridCell): boolean {
+  return isCellInteractable(cell) &&
+    hasToken(cell) &&
+    isPlayerHoldingToken() &&
+    canMergeTokens(gameState.player.inventory!, cell.token!);
+}
+
 function _shouldHighlightCell(cell: GridCell): boolean {
   return isCellInteractable(cell) && (hasToken(cell) || isPlayerHoldingToken());
 }
@@ -336,7 +440,9 @@ function shouldRenderCell(i: number, j: number): boolean {
 function getCellStyle(cell: GridCell): CellStyle {
   const baseStyle = { ...CONFIG.CELL_STYLES.default };
 
-  if (hasToken(cell)) {
+  if (isMergeTarget(cell)) {
+    Object.assign(baseStyle, CONFIG.CELL_STYLES.mergeTarget);
+  } else if (hasToken(cell)) {
     Object.assign(baseStyle, CONFIG.CELL_STYLES.withToken);
   }
 
@@ -344,8 +450,9 @@ function getCellStyle(cell: GridCell): CellStyle {
     Object.assign(baseStyle, CONFIG.CELL_STYLES.interactable);
   }
 
-  // Highlight cells differently when player is holding a token
-  if (isPlayerHoldingToken() && isCellInteractable(cell)) {
+  if (
+    isPlayerHoldingToken() && isCellInteractable(cell) && !isMergeTarget(cell)
+  ) {
     Object.assign(baseStyle, CONFIG.CELL_STYLES.holdingToken);
   }
 
@@ -353,6 +460,10 @@ function getCellStyle(cell: GridCell): CellStyle {
 }
 
 function createTooltipContent(cell: GridCell): string {
+  if (isMergeTarget(cell)) {
+    return getMergeTooltipContent(cell);
+  }
+
   if (hasToken(cell) && cell.token) {
     return `Value: ${cell.token.value}`;
   }
@@ -367,7 +478,8 @@ function createTooltipContent(cell: GridCell): string {
 function getTooltipOptions(cell: GridCell): leaflet.TooltipOptions {
   const hasCellToken = hasToken(cell);
   const shouldShowPermanent = hasCellToken ||
-    (isPlayerHoldingToken() && isCellInteractable(cell));
+    (isPlayerHoldingToken() && isCellInteractable(cell)) ||
+    isMergeTarget(cell);
 
   return {
     permanent: shouldShowPermanent,
@@ -412,7 +524,9 @@ function initializeDOM() {
             <ul>
                 <li>Click a token cell to pick it up</li>
                 <li>Click an empty cell to drop your token</li>
-                <li>Merge tokens of equal value to create higher values</li>
+                <li>Click a token cell while holding a token of equal value to merge them</li>
+                <li>Merging creates a new token with doubled value</li>
+                <li>Earn points when you merge tokens!</li>
             </ul>
         </div>
     `;
@@ -568,39 +682,68 @@ function handleCellClick(cell: GridCell) {
 
     if (!isCellInteractable(cell)) {
       console.log("Cell is not in interaction range");
+      provideVisualFeedback(cell, "outOfRange");
       return;
     }
 
-    // Pickup logic: if cell has token and player has empty inventory
+    let action: "pickup" | "drop" | "merge" | "invalid" = "invalid";
+    let success = false;
+
+    // Pickup: if cell has token and player has empty inventory
     if (hasToken(cell) && !isPlayerHoldingToken()) {
       pickupTokenFromCell(cell);
-      provideVisualFeedback(cell, "pickup");
-    } // Drop logic: if cell is empty and player has token
+      action = "pickup";
+      success = true;
+    } // Merge: if both cell and player have tokens of equal value
+    else if (hasToken(cell) && isPlayerHoldingToken()) {
+      success = attemptMerge(cell);
+      action = success ? "merge" : "invalid";
+    } // Drop: if cell is empty and player has token
     else if (!hasToken(cell) && isPlayerHoldingToken()) {
-      dropTokenToCell(cell);
-      provideVisualFeedback(cell, "drop");
-    } // Cannot pickup if already holding a token or cannot drop if cell has a token
+      success = dropTokenToCell(cell);
+      action = success ? "drop" : "invalid";
+    } // Not a valid action
     else {
       console.log("No valid action for this cell");
-      provideVisualFeedback(cell, "invalid");
+      action = "invalid";
     }
+
+    provideVisualFeedback(cell, action);
   } catch (error) {
     console.error("Error handling cell click:", error);
+    provideVisualFeedback(cell, "invalid");
   }
 }
 
 function provideVisualFeedback(
   cell: GridCell,
-  action: "pickup" | "drop" | "invalid",
+  action: "pickup" | "drop" | "merge" | "invalid" | "outOfRange",
 ) {
   if (!cell.element) return;
 
   let feedbackColor = "#ffff00"; // Default yellow
-  if (action === "pickup") feedbackColor = "#00ff00";
-  if (action === "drop") feedbackColor = "#00ffff";
-  if (action === "invalid") feedbackColor = "#ff0000";
+  let feedbackWeight = 4;
 
-  cell.element.setStyle({ color: feedbackColor, weight: 4 });
+  switch (action) {
+    case "pickup":
+      feedbackColor = "#00ff00"; // Green for pickup
+      break;
+    case "drop":
+      feedbackColor = "#00ffff"; // Cyan for drop
+      break;
+    case "merge":
+      feedbackColor = "#aa00ff"; // Purple for merge
+      feedbackWeight = 5;
+      break;
+    case "invalid":
+      feedbackColor = "#ff0000"; // Red for invalid
+      break;
+    case "outOfRange":
+      feedbackColor = "#888888"; // Gray for out of range
+      break;
+  }
+
+  cell.element.setStyle({ color: feedbackColor, weight: feedbackWeight });
   setTimeout(() => {
     updateCellVisualization(cell);
   }, CONFIG.UI.HIGHLIGHT_DURATION_MS);
@@ -641,14 +784,19 @@ function updateUI() {
   try {
     const statusPanel = getElementOrThrow("statusPanel");
 
-    statusPanel.textContent =
+    let statusText =
       `Points: ${gameState.player.points} | Goal: Reach value ${gameState.victoryCondition}`;
 
     if (gameState.isVictoryAchieved) {
-      statusPanel.textContent += " - VICTORY!";
+      statusText += " 🎉 VICTORY!";
       statusPanel.style.color = "green";
       statusPanel.style.fontWeight = "bold";
+    } else {
+      statusPanel.style.color = "";
+      statusPanel.style.fontWeight = "normal";
     }
+
+    statusPanel.textContent = statusText;
   } catch (error) {
     console.error("Failed to update UI:", error);
   }
@@ -671,6 +819,7 @@ function initializeGame() {
 
   updateInventoryDisplay();
 
+  console.log("Phase 5 Complete: Token crafting mechanics implemented!");
   updateUI();
 }
 

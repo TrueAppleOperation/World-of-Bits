@@ -29,7 +29,7 @@ D3a:
 - Add inventory constraints - maximum one token at a time
 - Update cell state when token is picked up (remove from cell)
 
-5.[ ] Token Crafting Mechanics
+5.[X] Token Crafting Mechanics
 
 - Implement placement mechanic - click on cell while holding token
 - Add merge detection - when placing token on cell with equal value
