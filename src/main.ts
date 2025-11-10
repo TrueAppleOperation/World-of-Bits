@@ -64,13 +64,113 @@ const CONFIG = {
       fillOpacity: 0.2,
     } as CellStyle,
   },
+  UI: {
+    HIGHLIGHT_DURATION_MS: 500,
+    TOOLTIP_CLASS: "cell-tooltip",
+  },
 } as const;
+
+// =============================================
+// ERROR HANDLING
+// =============================================
+
+class GameError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GameError";
+  }
+}
+
+function getElementOrThrow(id: string): HTMLElement {
+  const element = document.getElementById(id);
+  if (!element) {
+    throw new GameError(`Required DOM element with id '${id}' not found`);
+  }
+  return element;
+}
+
+function validateCell(cell: GridCell): void {
+  if (!cell) {
+    throw new GameError("Cell cannot be null or undefined");
+  }
+  if (cell.bounds === undefined) {
+    throw new GameError("Cell bounds are undefined");
+  }
+  if (typeof cell.i !== "number" || typeof cell.j !== "number") {
+    throw new GameError("Cell coordinates must be numbers");
+  }
+}
+
+function validateMapInitialized(): void {
+  if (!map) {
+    throw new GameError(
+      "Map must be initialized before performing this operation",
+    );
+  }
+}
+
+// =============================================
+// CONDITION EXTRACTION
+// =============================================
+
+function isCellInteractable(cell: GridCell): boolean {
+  return isWithinInteractionRange(cell.i, cell.j);
+}
+
+function hasToken(cell: GridCell): boolean {
+  return cell.token !== null;
+}
+
+function shouldHighlightCell(cell: GridCell): boolean {
+  return isCellInteractable(cell) && hasToken(cell);
+}
+
+function shouldRenderCell(i: number, j: number): boolean {
+  const withinRenderRadius = Math.abs(i) <= CONFIG.GRID_RENDER_RADIUS &&
+    Math.abs(j) <= CONFIG.GRID_RENDER_RADIUS;
+  return withinRenderRadius;
+}
+
+// =============================================
+// STYLE MANAGEMENT
+// =============================================
+
+function getCellStyle(cell: GridCell): CellStyle {
+  const baseStyle = { ...CONFIG.CELL_STYLES.default };
+
+  if (hasToken(cell)) {
+    Object.assign(baseStyle, CONFIG.CELL_STYLES.withToken);
+  }
+
+  if (isCellInteractable(cell)) {
+    Object.assign(baseStyle, CONFIG.CELL_STYLES.interactable);
+  }
+
+  return baseStyle;
+}
+
+function createTooltipContent(cell: GridCell): string {
+  if (hasToken(cell) && cell.token) {
+    return `Value: ${cell.token.value}`;
+  }
+  return `Cell (${cell.i},${cell.j})`;
+}
+
+function getTooltipOptions(cell: GridCell): leaflet.TooltipOptions {
+  const hasCellToken = hasToken(cell);
+
+  return {
+    permanent: hasCellToken,
+    direction: "center",
+    className: hasCellToken ? CONFIG.UI.TOOLTIP_CLASS : "",
+  };
+}
 
 // =============================================
 // GLOBAL STATE
 // =============================================
 
-let gameState: GameState = {
+const gameState: GameState = {
   player: {
     inventory: null,
     location: CONFIG.CLASSROOM_LOCATION,
@@ -140,7 +240,7 @@ function initializeMap(): leaflet.Map {
 }
 
 // =============================================
-// GRID SYSTEM UTILITIES
+// GRID SYSTEM
 // =============================================
 
 function generateCellKey(i: number, j: number): string {
@@ -171,38 +271,14 @@ function isWithinInteractionRange(cellI: number, cellJ: number): boolean {
 // =============================================
 
 function createCellElement(cell: GridCell): leaflet.Rectangle {
-  const isInteractable = isWithinInteractionRange(cell.i, cell.j);
-  const hasToken = cell.token !== null;
+  validateMapInitialized();
+  validateCell(cell);
 
-  const style: CellStyle = { ...CONFIG.CELL_STYLES.default };
-
-  if (hasToken) {
-    style.color = CONFIG.CELL_STYLES.withToken.color;
-    style.weight = CONFIG.CELL_STYLES.withToken.weight;
-    style.fillOpacity = CONFIG.CELL_STYLES.withToken.fillOpacity;
-  }
-
-  if (isInteractable) {
-    style.color = CONFIG.CELL_STYLES.interactable.color;
-    style.weight = CONFIG.CELL_STYLES.interactable.weight;
-    style.fillOpacity = CONFIG.CELL_STYLES.interactable.fillOpacity;
-  }
-
+  const style = getCellStyle(cell);
   const rectangle = leaflet.rectangle(cell.bounds, style);
-  rectangle.addTo(map);
 
-  if (hasToken && cell.token) {
-    rectangle.bindTooltip(`Value: ${cell.token.value}`, {
-      permanent: true,
-      direction: "center",
-      className: "cell-tooltip",
-    });
-  } else {
-    rectangle.bindTooltip(`Cell (${cell.i},${cell.j})`, {
-      permanent: false,
-      direction: "center",
-    });
-  }
+  rectangle.addTo(map);
+  rectangle.bindTooltip(createTooltipContent(cell), getTooltipOptions(cell));
 
   rectangle.on("click", () => {
     handleCellClick(cell);
@@ -212,6 +288,9 @@ function createCellElement(cell: GridCell): leaflet.Rectangle {
 }
 
 function updateCellVisualization(cell: GridCell) {
+  validateMapInitialized();
+  validateCell(cell);
+
   if (cell.element) {
     map.removeLayer(cell.element);
   }
@@ -221,6 +300,7 @@ function updateCellVisualization(cell: GridCell) {
 
 function initializeGridSystem() {
   console.log("Initializing grid system...");
+  validateMapInitialized();
 
   for (
     let i = -CONFIG.GRID_RENDER_RADIUS;
@@ -232,6 +312,8 @@ function initializeGridSystem() {
       j <= CONFIG.GRID_RENDER_RADIUS;
       j++
     ) {
+      if (!shouldRenderCell(i, j)) continue;
+
       const cellKey = generateCellKey(i, j);
 
       if (!gameState.grid.has(cellKey)) {
@@ -256,19 +338,25 @@ function initializeGridSystem() {
 }
 
 // =============================================
-// CELL INTERACTION HANDLER (PLACEHOLDER)
+// CELL INTERACTION HANDLER
 // =============================================
 
 function handleCellClick(cell: GridCell) {
-  console.log(`Cell clicked: (${cell.i}, ${cell.j})`);
-  console.log(`Token:`, cell.token);
-  console.log(`Interactable: ${isWithinInteractionRange(cell.i, cell.j)}`);
+  try {
+    validateCell(cell);
 
-  if (cell.element) {
-    cell.element.setStyle({ color: "#ffff00", weight: 3 });
-    setTimeout(() => {
-      updateCellVisualization(cell);
-    }, 500);
+    console.log(`Cell clicked: (${cell.i}, ${cell.j})`);
+    console.log(`Token:`, cell.token);
+    console.log(`Interactable: ${isCellInteractable(cell)}`);
+
+    if (cell.element && shouldHighlightCell(cell)) {
+      cell.element.setStyle({ color: "#ffff00", weight: 3 });
+      setTimeout(() => {
+        updateCellVisualization(cell);
+      }, CONFIG.UI.HIGHLIGHT_DURATION_MS);
+    }
+  } catch (error) {
+    console.error("Error handling cell click:", error);
   }
 }
 
@@ -277,6 +365,8 @@ function handleCellClick(cell: GridCell) {
 // =============================================
 
 function setupMapBoundaryHandling() {
+  validateMapInitialized();
+
   map.on("moveend", () => {
     console.log("Map position updated - ready for dynamic grid loading");
   });
@@ -302,16 +392,15 @@ function setupMapBoundaryHandling() {
 // =============================================
 
 function updateUI() {
-  const inventoryDisplay = document.getElementById("inventoryDisplay");
-  if (inventoryDisplay) {
+  try {
+    const inventoryDisplay = getElementOrThrow("inventoryDisplay");
+    const statusPanel = getElementOrThrow("statusPanel");
+
     const inventory = gameState.player.inventory;
     inventoryDisplay.textContent = inventory
       ? `Inventory: Token (Value: ${inventory.value})`
       : "Inventory: Empty";
-  }
 
-  const statusPanel = document.getElementById("statusPanel");
-  if (statusPanel) {
     statusPanel.textContent =
       `Points: ${gameState.player.points} | Goal: Reach value ${gameState.victoryCondition}`;
 
@@ -320,6 +409,8 @@ function updateUI() {
       statusPanel.style.color = "green";
       statusPanel.style.fontWeight = "bold";
     }
+  } catch (error) {
+    console.error("Failed to update UI:", error);
   }
 }
 
