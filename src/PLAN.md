@@ -15,7 +15,7 @@ D3a:
 - Design cell visualization showing token values without clicking
 - Ensure grid extends to map edges for "infinite world" illusion
 
-3.[ ] Token Spawning
+3.[X] Token Spawning
 
 - Use the luck() function to create deterministic spawning
 - Implement spawn algorithm that uses cell coordinates as seed

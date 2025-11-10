@@ -8,6 +8,9 @@ import "./style.css";
 // Fix missing marker images
 import "./_leafletWorkaround.ts";
 
+// Import our luck function for deterministic spawning
+import luck from "./_luck.ts";
+
 // =============================================
 // CORE INTERFACES & TYPE DEFINITIONS
 // =============================================
@@ -55,6 +58,19 @@ const CONFIG = {
   VICTORY_THRESHOLD: 2048,
   INITIAL_SPAWN_VALUES: [1, 2, 4],
   GRID_RENDER_RADIUS: 15,
+
+  // Token Spawning
+  SPAWN: {
+    PROBABILITY: 0.15,
+    VALUE_DISTRIBUTION: {
+      1: 0.6,
+      2: 0.3,
+      4: 0.1,
+    },
+    // Area where tokens can spawn
+    SPAWN_RADIUS: 8,
+  },
+
   CELL_STYLES: {
     default: { color: "#3388ff", weight: 1, fillOpacity: 0.1 } as CellStyle,
     withToken: { color: "#ff3388", weight: 2, fillOpacity: 0.3 } as CellStyle,
@@ -107,6 +123,100 @@ function validateMapInitialized(): void {
       "Map must be initialized before performing this operation",
     );
   }
+}
+
+// =============================================
+// TOKEN SPAWNING LOGIC
+// =============================================
+
+function shouldSpawnToken(i: number, j: number): boolean {
+  // Only spawn tokens within the spawn radius
+  const withinSpawnRadius = Math.abs(i) <= CONFIG.SPAWN.SPAWN_RADIUS &&
+    Math.abs(j) <= CONFIG.SPAWN.SPAWN_RADIUS;
+  if (!withinSpawnRadius) return false;
+
+  // Use deterministic luck based on cell coordinates
+  const spawnSeed = `${i},${j}`;
+  const spawnRoll = luck(spawnSeed);
+
+  return spawnRoll < CONFIG.SPAWN.PROBABILITY;
+}
+
+function determineTokenValue(i: number, j: number): number {
+  // Use a different seed for value determination to ensure independence
+  const valueSeed = `${i},${j},value`;
+  const valueRoll = luck(valueSeed);
+
+  let cumulativeProbability = 0;
+  for (
+    const [value, probability] of Object.entries(
+      CONFIG.SPAWN.VALUE_DISTRIBUTION,
+    )
+  ) {
+    cumulativeProbability += probability;
+    if (valueRoll < cumulativeProbability) {
+      return parseInt(value);
+    }
+  }
+
+  // Fallback to value 1
+  return 1;
+}
+
+function spawnTokenInCell(i: number, j: number): Token | null {
+  if (!shouldSpawnToken(i, j)) {
+    return null;
+  }
+
+  const value = determineTokenValue(i, j);
+  return { value };
+}
+
+function initializeTokenSpawning() {
+  console.log("Initializing deterministic token spawning...");
+
+  let tokensSpawned = 0;
+
+  for (
+    let i = -CONFIG.GRID_RENDER_RADIUS;
+    i <= CONFIG.GRID_RENDER_RADIUS;
+    i++
+  ) {
+    for (
+      let j = -CONFIG.GRID_RENDER_RADIUS;
+      j <= CONFIG.GRID_RENDER_RADIUS;
+      j++
+    ) {
+      const cellKey = generateCellKey(i, j);
+      const cell = gameState.grid.get(cellKey);
+
+      if (cell) {
+        const token = spawnTokenInCell(i, j);
+        if (token) {
+          cell.token = token;
+          tokensSpawned++;
+
+          updateCellVisualization(cell);
+        }
+      }
+    }
+  }
+
+  console.log(`Spawned ${tokensSpawned} tokens across the grid`);
+  logTokenDistribution();
+}
+
+function logTokenDistribution() {
+  const distribution: { [key: number]: number } = {};
+
+  for (const cell of gameState.grid.values()) {
+    if (cell.token) {
+      const value = cell.token.value;
+      distribution[value] = (distribution[value] || 0) + 1;
+    }
+  }
+
+  console.log("Token value distribution:", distribution);
 }
 
 // =============================================
@@ -187,7 +297,7 @@ let map: leaflet.Map;
 // DOM ELEMENT SETUP
 // =============================================
 
-function initializeDOM() { // HTML structure
+function initializeDOM() {
   document.body.innerHTML = "";
 
   const controlPanel = document.createElement("div");
@@ -424,11 +534,13 @@ function initializeGame() {
   initializeDOM();
   map = initializeMap();
   initializeGridSystem();
+
+  // Initialize token spawning after grid is set up
+  initializeTokenSpawning();
+
   setupMapBoundaryHandling();
 
-  console.log("Grid system ready - awaiting deterministic spawning");
-  console.log("Phase 2 Complete: Grid system implemented!");
-
+  console.log("Phase 3 Complete: Deterministic token spawning implemented!");
   updateUI();
 }
 
