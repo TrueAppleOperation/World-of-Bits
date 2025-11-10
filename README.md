@@ -1,3 +1,3 @@
 # CMPM 121 D3 Project
 
-This is the starting point for your CMPM 121 D3 project. Students should make sure to remove _this_ content from their README.md file and replace it with their own project documentation.
+For is this CMPM 121 D3 project, it will focus on building and deploying a game that combines elements of 4096 and Threes with Pokemon Go. Implemented from skills learned from D1 and D2 demo projects.
