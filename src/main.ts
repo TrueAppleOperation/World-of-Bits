@@ -19,6 +19,19 @@ interface Token {
   value: number;
 }
 
+interface WorldCoordinates {
+  lat: number;
+  lng: number;
+}
+
+interface CellCoordinates {
+  i: number;
+  j: number;
+}
+
+// Unique identifier for grid cells
+type CellKey = string; // "i,j" format
+
 interface GridCell {
   i: number;
   j: number;
@@ -37,6 +50,74 @@ interface GameState {
   grid: Map<string, GridCell>;
   victoryCondition: number;
   isVictoryAchieved: boolean;
+}
+
+// =============================================
+// COORDINATE CONVERSION
+// =============================================
+
+// Convert world coordinates (lat/lng) to grid cell coordinates
+// Uses Null Island (0,0) as the anchor point
+function _worldToCell(lat: number, lng: number): CellCoordinates {
+  const i = Math.floor(lat / CONFIG.TILE_DEGREES);
+  const j = Math.floor(lng / CONFIG.TILE_DEGREES);
+  return { i, j };
+}
+
+//Convert grid cell coordinates to world bounds (LatLngBounds)
+//Returns the geographic bounds of the specified cell
+function cellToWorldBounds(i: number, j: number): leaflet.LatLngBounds {
+  const southWest = leaflet.latLng(
+    i * CONFIG.TILE_DEGREES,
+    j * CONFIG.TILE_DEGREES,
+  );
+  const northEast = leaflet.latLng(
+    (i + 1) * CONFIG.TILE_DEGREES,
+    (j + 1) * CONFIG.TILE_DEGREES,
+  );
+  return leaflet.latLngBounds(southWest, northEast);
+}
+
+// Convert cell coordinates to a unique string key
+function cellToKey(i: number, j: number): CellKey {
+  return `${i},${j}`;
+}
+
+// Convert cell key back to coordinates
+function _keyToCell(key: CellKey): CellCoordinates {
+  const [i, j] = key.split(",").map(Number);
+  return { i, j };
+}
+
+// Get the world coordinates for the center of a cell
+function _cellToWorldCenter(i: number, j: number): WorldCoordinates {
+  return {
+    lat: (i + 0.5) * CONFIG.TILE_DEGREES,
+    lng: (j + 0.5) * CONFIG.TILE_DEGREES,
+  };
+}
+
+// Calculate the distance between two cells in grid units
+function cellDistance(cell1: CellCoordinates, cell2: CellCoordinates): number {
+  return Math.max(Math.abs(cell1.i - cell2.i), Math.abs(cell1.j - cell2.j));
+}
+
+// Get all cells within a specified radius of a target cell
+function _getCellsInRadius(
+  center: CellCoordinates,
+  radius: number,
+): CellCoordinates[] {
+  const cells: CellCoordinates[] = [];
+
+  for (let i = center.i - radius; i <= center.i + radius; i++) {
+    for (let j = center.j - radius; j <= center.j + radius; j++) {
+      if (cellDistance(center, { i, j }) <= radius) {
+        cells.push({ i, j });
+      }
+    }
+  }
+
+  return cells;
 }
 
 // =============================================
@@ -628,21 +709,11 @@ function initializeMap(): leaflet.Map {
 // =============================================
 
 function generateCellKey(i: number, j: number): string {
-  return `${i},${j}`;
+  return cellToKey(i, j);
 }
 
 function calculateCellBounds(i: number, j: number): leaflet.LatLngBounds {
-  const origin = CONFIG.CLASSROOM_LOCATION;
-  return leaflet.latLngBounds([
-    [
-      origin.lat + i * CONFIG.TILE_DEGREES,
-      origin.lng + j * CONFIG.TILE_DEGREES,
-    ],
-    [
-      origin.lat + (i + 1) * CONFIG.TILE_DEGREES,
-      origin.lng + (j + 1) * CONFIG.TILE_DEGREES,
-    ],
-  ]);
+  return cellToWorldBounds(i, j);
 }
 
 function isWithinInteractionRange(cellI: number, cellJ: number): boolean {

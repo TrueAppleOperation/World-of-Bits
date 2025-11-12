@@ -44,7 +44,7 @@ D3a:
 
 D3b:
 
-7.[] Define Core/Data Type
+7.[X] Define Core/Data Type
 
 - Define the Coordinate System
 - Create the coordinate converserion Utilities
