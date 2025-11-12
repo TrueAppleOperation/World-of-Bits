@@ -58,14 +58,14 @@ interface GameState {
 
 // Convert world coordinates (lat/lng) to grid cell coordinates
 // Uses Null Island (0,0) as the anchor point
-function _worldToCell(lat: number, lng: number): CellCoordinates {
+function worldToCell(lat: number, lng: number): CellCoordinates {
   const i = Math.floor(lat / CONFIG.TILE_DEGREES);
   const j = Math.floor(lng / CONFIG.TILE_DEGREES);
   return { i, j };
 }
 
-//Convert grid cell coordinates to world bounds (LatLngBounds)
-//Returns the geographic bounds of the specified cell
+// Convert grid cell coordinates to world bounds (LatLngBounds)
+// Returns the geographic bounds of the specified cell
 function cellToWorldBounds(i: number, j: number): leaflet.LatLngBounds {
   const southWest = leaflet.latLng(
     i * CONFIG.TILE_DEGREES,
@@ -103,7 +103,7 @@ function cellDistance(cell1: CellCoordinates, cell2: CellCoordinates): number {
 }
 
 // Get all cells within a specified radius of a target cell
-function _getCellsInRadius(
+function getCellsInRadius(
   center: CellCoordinates,
   radius: number,
 ): CellCoordinates[] {
@@ -118,6 +118,113 @@ function _getCellsInRadius(
   }
 
   return cells;
+}
+
+// =============================================
+// DYNAMIC GRID MANAGEMENT SYSTEM
+// =============================================
+
+// Get the range of cells currently visible in the map viewport
+function getVisibleCellRange(
+  map: leaflet.Map,
+): { minI: number; maxI: number; minJ: number; maxJ: number } {
+  const bounds = map.getBounds();
+  const southWest = bounds.getSouthWest();
+  const northEast = bounds.getNorthEast();
+
+  const minCell = worldToCell(southWest.lat, southWest.lng);
+  const maxCell = worldToCell(northEast.lat, northEast.lng);
+
+  // Add buffer cells around the edges to ensure smooth rendering during movement
+  const buffer = CONFIG.VIEWPORT_BUFFER;
+
+  return {
+    minI: minCell.i - buffer,
+    maxI: maxCell.i + buffer,
+    minJ: minCell.j - buffer,
+    maxJ: maxCell.j + buffer,
+  };
+}
+
+// Spawn a new cell at the specified coordinates
+function spawnCell(i: number, j: number): GridCell {
+  const bounds = cellToWorldBounds(i, j);
+
+  const newCell: GridCell = {
+    i,
+    j,
+    token: null,
+    bounds,
+    element: null,
+    isVisible: true,
+  };
+
+  // Spawn token if applicable
+  const token = spawnTokenInCell(i, j);
+  if (token) {
+    newCell.token = token;
+  }
+
+  // Create visual element
+  newCell.element = createCellElement(newCell);
+
+  console.log(`Spawned cell (${i}, ${j}) with token:`, token?.value || "none");
+  return newCell;
+}
+
+// Remove a cell from the map and game state
+function despawnCell(cellKey: CellKey): void {
+  const cell = gameState.grid.get(cellKey);
+  if (!cell) return;
+
+  // Remove from map
+  if (cell.element) {
+    map.removeLayer(cell.element);
+  }
+
+  // Remove from game state
+  gameState.grid.delete(cellKey);
+
+  console.log(`Despawned cell ${cellKey}`);
+}
+
+function updateCellVisibility(): void {
+  const visibleRange = getVisibleCellRange(map);
+  const currentlyVisible = new Set<string>();
+
+  // Spawn new cells in visible range
+  for (let i = visibleRange.minI; i <= visibleRange.maxI; i++) {
+    for (let j = visibleRange.minJ; j <= visibleRange.maxJ; j++) {
+      const cellKey = cellToKey(i, j);
+      currentlyVisible.add(cellKey);
+
+      if (!gameState.grid.has(cellKey)) {
+        const newCell = spawnCell(i, j);
+        gameState.grid.set(cellKey, newCell);
+      } else {
+        // Ensure existing cell is marked as visible
+        const cell = gameState.grid.get(cellKey)!;
+        cell.isVisible = true;
+      }
+    }
+  }
+
+  // Despawn cells that are no longer visible
+  for (const [cellKey, cell] of gameState.grid.entries()) {
+    if (!currentlyVisible.has(cellKey)) {
+      cell.isVisible = false;
+      despawnCell(cellKey);
+    }
+  }
+
+  console.log(`Grid updated: ${gameState.grid.size} cells visible`);
+}
+
+// Handle map movement and update grid accordingly
+function handleMapMove(): void {
+  console.log("Map moved, updating grid...");
+  updateCellVisibility();
+  updateInteractionRangeDisplay();
 }
 
 // =============================================
@@ -138,7 +245,9 @@ const CONFIG = {
   INTERACTION_RANGE: 3,
   VICTORY_THRESHOLD: 2048,
   INITIAL_SPAWN_VALUES: [1, 2, 4],
-  GRID_RENDER_RADIUS: 25,
+
+  // Phase 2: Dynamic grid configuration
+  VIEWPORT_BUFFER: 2, // Extra cells to render beyond viewport for smooth movement
 
   // Token Spawning
   SPAWN: {
@@ -148,7 +257,7 @@ const CONFIG = {
       2: 0.3,
       4: 0.1,
     },
-    // Area where tokens can spawn
+    // Area where tokens can spawn - now relative to player position
     SPAWN_RADIUS: 8,
   },
 
@@ -220,7 +329,7 @@ function validateMapInitialized(): void {
 }
 
 // =============================================
-// INTERACTION RANGE & GAME LOGIC ENHANCEMENTS
+// INTERACTION RANGE/GAME LOGIC
 // =============================================
 
 function updateInteractionRangeDisplay(): void {
@@ -232,17 +341,23 @@ function updateInteractionRangeDisplay(): void {
 }
 
 function _getInteractionRangeBounds(): leaflet.LatLngBounds {
-  const origin = CONFIG.CLASSROOM_LOCATION;
-  return leaflet.latLngBounds([
-    [
-      origin.lat - CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
-      origin.lng - CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
-    ],
-    [
-      origin.lat + CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
-      origin.lng + CONFIG.INTERACTION_RANGE * CONFIG.TILE_DEGREES,
-    ],
-  ]);
+  const playerCell = worldToCell(
+    gameState.player.location.lat,
+    gameState.player.location.lng,
+  );
+
+  const interactionCells = getCellsInRadius(
+    playerCell,
+    CONFIG.INTERACTION_RANGE,
+  );
+  const bounds = leaflet.latLngBounds([]);
+
+  for (const cell of interactionCells) {
+    const cellBounds = cellToWorldBounds(cell.i, cell.j);
+    bounds.extend(cellBounds);
+  }
+
+  return bounds;
 }
 
 function showVictoryMessage(): void {
@@ -443,9 +558,15 @@ function updateInventoryDisplay(): void {
 // =============================================
 
 function shouldSpawnToken(i: number, j: number): boolean {
-  // Only spawn tokens within the spawn radius
-  const withinSpawnRadius = Math.abs(i) <= CONFIG.SPAWN.SPAWN_RADIUS &&
-    Math.abs(j) <= CONFIG.SPAWN.SPAWN_RADIUS;
+  // Use player's current position for spawn radius calculation
+  const playerCell = worldToCell(
+    gameState.player.location.lat,
+    gameState.player.location.lng,
+  );
+
+  const distance = cellDistance(playerCell, { i, j });
+  const withinSpawnRadius = distance <= CONFIG.SPAWN.SPAWN_RADIUS;
+
   if (!withinSpawnRadius) return false;
 
   // Use deterministic luck based on cell coordinates
@@ -485,40 +606,10 @@ function spawnTokenInCell(i: number, j: number): Token | null {
 }
 
 function initializeTokenSpawning() {
-  console.log("Initializing deterministic token spawning...");
-
-  let tokensSpawned = 0;
-
-  for (
-    let i = -CONFIG.GRID_RENDER_RADIUS;
-    i <= CONFIG.GRID_RENDER_RADIUS;
-    i++
-  ) {
-    for (
-      let j = -CONFIG.GRID_RENDER_RADIUS;
-      j <= CONFIG.GRID_RENDER_RADIUS;
-      j++
-    ) {
-      const cellKey = generateCellKey(i, j);
-      const cell = gameState.grid.get(cellKey);
-
-      if (cell) {
-        const token = spawnTokenInCell(i, j);
-        if (token) {
-          cell.token = token;
-          tokensSpawned++;
-
-          updateCellVisualization(cell);
-        }
-      }
-    }
-  }
-
-  console.log(`Spawned ${tokensSpawned} tokens across the grid`);
-  logTokenDistribution();
+  console.log("Token spawning system ready - tokens will spawn dynamically");
 }
 
-function logTokenDistribution() {
+function _logTokenDistribution() {
   const distribution: { [key: number]: number } = {};
 
   for (const cell of gameState.grid.values()) {
@@ -536,7 +627,12 @@ function logTokenDistribution() {
 // =============================================
 
 function isCellInteractable(cell: GridCell): boolean {
-  return isWithinInteractionRange(cell.i, cell.j);
+  const playerCell = worldToCell(
+    gameState.player.location.lat,
+    gameState.player.location.lng,
+  );
+  const distance = cellDistance(playerCell, { i: cell.i, j: cell.j });
+  return distance <= CONFIG.INTERACTION_RANGE;
 }
 
 function hasToken(cell: GridCell): boolean {
@@ -560,12 +656,6 @@ function isMergeTarget(cell: GridCell): boolean {
 
 function _shouldHighlightCell(cell: GridCell): boolean {
   return isCellInteractable(cell) && (hasToken(cell) || isPlayerHoldingToken());
-}
-
-function shouldRenderCell(i: number, j: number): boolean {
-  const withinRenderRadius = Math.abs(i) <= CONFIG.GRID_RENDER_RADIUS &&
-    Math.abs(j) <= CONFIG.GRID_RENDER_RADIUS;
-  return withinRenderRadius;
 }
 
 // =============================================
@@ -708,16 +798,20 @@ function initializeMap(): leaflet.Map {
 // GRID SYSTEM
 // =============================================
 
-function generateCellKey(i: number, j: number): string {
+function _generateCellKey(i: number, j: number): string {
   return cellToKey(i, j);
 }
 
-function calculateCellBounds(i: number, j: number): leaflet.LatLngBounds {
+function _calculateCellBounds(i: number, j: number): leaflet.LatLngBounds {
   return cellToWorldBounds(i, j);
 }
 
-function isWithinInteractionRange(cellI: number, cellJ: number): boolean {
-  const distance = Math.max(Math.abs(cellI), Math.abs(cellJ));
+function _isWithinInteractionRange(cellI: number, cellJ: number): boolean {
+  const playerCell = worldToCell(
+    gameState.player.location.lat,
+    gameState.player.location.lng,
+  );
+  const distance = cellDistance(playerCell, { i: cellI, j: cellJ });
   return distance <= CONFIG.INTERACTION_RANGE;
 }
 
@@ -754,42 +848,11 @@ function updateCellVisualization(cell: GridCell) {
 }
 
 function initializeGridSystem() {
-  console.log("Initializing grid system...");
+  console.log("Initializing dynamic grid system...");
   validateMapInitialized();
 
-  for (
-    let i = -CONFIG.GRID_RENDER_RADIUS;
-    i <= CONFIG.GRID_RENDER_RADIUS;
-    i++
-  ) {
-    for (
-      let j = -CONFIG.GRID_RENDER_RADIUS;
-      j <= CONFIG.GRID_RENDER_RADIUS;
-      j++
-    ) {
-      if (!shouldRenderCell(i, j)) continue;
-
-      const cellKey = generateCellKey(i, j);
-
-      if (!gameState.grid.has(cellKey)) {
-        const bounds = calculateCellBounds(i, j);
-
-        const newCell: GridCell = {
-          i,
-          j,
-          token: null,
-          bounds,
-          element: null,
-          isVisible: true,
-        };
-
-        newCell.element = createCellElement(newCell);
-        gameState.grid.set(cellKey, newCell);
-      }
-    }
-  }
-
-  console.log(`Grid system initialized with ${gameState.grid.size} cells`);
+  // Initial grid setup using viewport-based loading
+  updateCellVisibility();
 }
 
 // =============================================
@@ -804,9 +867,6 @@ function handleCellClick(cell: GridCell) {
     console.log(`Token in cell:`, cell.token);
     console.log(`Player inventory:`, gameState.player.inventory);
     console.log(`Interactable: ${isCellInteractable(cell)}`);
-    console.log(
-      `Distance from player: ${Math.max(Math.abs(cell.i), Math.abs(cell.j))}`,
-    );
 
     if (!isCellInteractable(cell)) {
       console.log("Cell is not in interaction range");
@@ -898,24 +958,11 @@ function provideVisualFeedback(
 function setupMapBoundaryHandling() {
   validateMapInitialized();
 
-  map.on("moveend", () => {
-    console.log("Map position updated - ready for dynamic grid loading");
-  });
+  // Set up moveend event for dynamic grid loading
+  map.on("moveend", handleMapMove);
 
-  map.setMaxBounds(leaflet.latLngBounds(
-    leaflet.latLng(
-      CONFIG.CLASSROOM_LOCATION.lat -
-        CONFIG.GRID_RENDER_RADIUS * CONFIG.TILE_DEGREES,
-      CONFIG.CLASSROOM_LOCATION.lng -
-        CONFIG.GRID_RENDER_RADIUS * CONFIG.TILE_DEGREES,
-    ),
-    leaflet.latLng(
-      CONFIG.CLASSROOM_LOCATION.lat +
-        CONFIG.GRID_RENDER_RADIUS * CONFIG.TILE_DEGREES,
-      CONFIG.CLASSROOM_LOCATION.lng +
-        CONFIG.GRID_RENDER_RADIUS * CONFIG.TILE_DEGREES,
-    ),
-  ));
+  // Remove fixed bounds for infinite world
+  // map.setMaxBounds(null);
 }
 
 // =============================================
@@ -931,7 +978,8 @@ function updateUI() {
     } else {
       let statusText = `Points: ${gameState.player.points} | ` +
         `Goal: Create a ${CONFIG.VICTORY_THRESHOLD} token | ` +
-        `Range: ${CONFIG.INTERACTION_RANGE} cells`;
+        `Range: ${CONFIG.INTERACTION_RANGE} cells | ` +
+        `Visible Cells: ${gameState.grid.size}`;
 
       const highestToken = getHighestTokenValue();
       if (highestToken > 4) {

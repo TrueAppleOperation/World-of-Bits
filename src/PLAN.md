@@ -49,7 +49,7 @@ D3b:
 - Define the Coordinate System
 - Create the coordinate converserion Utilities
 
-8.[] Set up the Dynamic Grid Management System
+8.[X] Set up the Dynamic Grid Management System
 
 - Implement viewport-based cell loading - replace CONFIG.GRID_RENDER_RADIUS
 - Create a cell lifecycle management
