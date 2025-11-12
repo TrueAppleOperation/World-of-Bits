@@ -43,3 +43,23 @@ D3a:
 - Create status panel updates for game state feedback
 
 D3b:
+
+7.[] Define Core/Data Type
+
+- Define the Coordinate System
+- Create the coordinate converserion Utilities
+
+8.[] Set up the Dynamic Grid Management System
+
+- Implement viewport-based cell loading - replace CONFIG.GRID_RENDER_RADIUS
+- Create a cell lifecycle management
+
+9.[] Memoryless Cell Behavior
+
+- Implement stateless cell system
+- Mod token spawning for dynamic grid
+
+10.[] Movement/Scrolling
+
+- Implement map movement detection - Set up moveend
+- Add movement controls
