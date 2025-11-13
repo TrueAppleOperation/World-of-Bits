@@ -47,7 +47,8 @@ interface GameState {
     location: leaflet.LatLng;
     points: number;
   };
-  grid: Map<string, GridCell>;
+  // Remove persistent grid storage
+  visibleCells: Set<CellKey>; // Track currently visible cells for cleanup
   victoryCondition: number;
   isVictoryAchieved: boolean;
 }
@@ -121,6 +122,95 @@ function getCellsInRadius(
 }
 
 // =============================================
+// MEMORYLESS CELL BEHAVIOR SYSTEM
+// =============================================
+
+const activeCells = new Map<CellKey, GridCell>();
+
+// Check if a cell is currently active (visible on map)
+function isCellActive(cellKey: CellKey): boolean {
+  return activeCells.has(cellKey);
+}
+
+// Get an active cell, or create a new one with fresh state
+function getOrCreateCell(i: number, j: number): GridCell {
+  const cellKey = cellToKey(i, j);
+
+  // If cell is already active, return it
+  if (activeCells.has(cellKey)) {
+    return activeCells.get(cellKey)!;
+  }
+
+  // Create a fresh cell with new state
+  return spawnCell(i, j);
+}
+
+// Spawn a new cell with completely fresh state
+function spawnCell(i: number, j: number): GridCell {
+  const bounds = cellToWorldBounds(i, j);
+
+  const newCell: GridCell = {
+    i,
+    j,
+    token: null, // Always start with no token
+    bounds,
+    element: null,
+    isVisible: true,
+  };
+
+  const token = spawnTokenInCell(i, j);
+  if (token) {
+    newCell.token = token;
+  }
+
+  // Create visual element
+  newCell.element = createCellElement(newCell);
+
+  // Add to active cells cache
+  const cellKey = cellToKey(i, j);
+  activeCells.set(cellKey, newCell);
+  gameState.visibleCells.add(cellKey);
+
+  console.log(
+    `Spawned fresh cell (${i}, ${j}) with token:`,
+    token?.value || "none",
+  );
+  return newCell;
+}
+
+function despawnCell(cellKey: CellKey): void {
+  const cell = activeCells.get(cellKey);
+  if (!cell) return;
+
+  // Remove from map
+  if (cell.element) {
+    map.removeLayer(cell.element);
+  }
+
+  // Remove cell from memory
+  activeCells.delete(cellKey);
+  gameState.visibleCells.delete(cellKey);
+
+  console.log(`Completely despawned cell ${cellKey} - state reset`);
+}
+
+// Clean up all active cells
+function cleanupAllCells(): void {
+  console.log("Cleaning up all cells...");
+
+  for (const [_cellKey, cell] of activeCells.entries()) {
+    if (cell.element) {
+      map.removeLayer(cell.element);
+    }
+  }
+
+  activeCells.clear();
+  gameState.visibleCells.clear();
+
+  console.log("All cells cleaned up - fresh state ready");
+}
+
+// =============================================
 // DYNAMIC GRID MANAGEMENT SYSTEM
 // =============================================
 
@@ -146,48 +236,6 @@ function getVisibleCellRange(
   };
 }
 
-// Spawn a new cell at the specified coordinates
-function spawnCell(i: number, j: number): GridCell {
-  const bounds = cellToWorldBounds(i, j);
-
-  const newCell: GridCell = {
-    i,
-    j,
-    token: null,
-    bounds,
-    element: null,
-    isVisible: true,
-  };
-
-  // Spawn token if applicable
-  const token = spawnTokenInCell(i, j);
-  if (token) {
-    newCell.token = token;
-  }
-
-  // Create visual element
-  newCell.element = createCellElement(newCell);
-
-  console.log(`Spawned cell (${i}, ${j}) with token:`, token?.value || "none");
-  return newCell;
-}
-
-// Remove a cell from the map and game state
-function despawnCell(cellKey: CellKey): void {
-  const cell = gameState.grid.get(cellKey);
-  if (!cell) return;
-
-  // Remove from map
-  if (cell.element) {
-    map.removeLayer(cell.element);
-  }
-
-  // Remove from game state
-  gameState.grid.delete(cellKey);
-
-  console.log(`Despawned cell ${cellKey}`);
-}
-
 function updateCellVisibility(): void {
   const visibleRange = getVisibleCellRange(map);
   const currentlyVisible = new Set<string>();
@@ -198,31 +246,30 @@ function updateCellVisibility(): void {
       const cellKey = cellToKey(i, j);
       currentlyVisible.add(cellKey);
 
-      if (!gameState.grid.has(cellKey)) {
-        const newCell = spawnCell(i, j);
-        gameState.grid.set(cellKey, newCell);
+      if (!isCellActive(cellKey)) {
+        // Create fresh cells
+        getOrCreateCell(i, j);
       } else {
-        // Ensure existing cell is marked as visible
-        const cell = gameState.grid.get(cellKey)!;
+        // Cell is already active, ensure it's marked as visible
+        const cell = activeCells.get(cellKey)!;
         cell.isVisible = true;
       }
     }
   }
 
   // Despawn cells that are no longer visible
-  for (const [cellKey, cell] of gameState.grid.entries()) {
+  for (const cellKey of activeCells.keys()) {
     if (!currentlyVisible.has(cellKey)) {
-      cell.isVisible = false;
       despawnCell(cellKey);
     }
   }
 
-  console.log(`Grid updated: ${gameState.grid.size} cells visible`);
+  console.log(`Grid updated: ${activeCells.size} active cells`);
 }
 
 // Handle map movement and update grid accordingly
 function handleMapMove(): void {
-  console.log("Map moved, updating grid...");
+  console.log("Map moved, updating grid with fresh cells...");
   updateCellVisibility();
   updateInteractionRangeDisplay();
 }
@@ -246,7 +293,7 @@ const CONFIG = {
   VICTORY_THRESHOLD: 2048,
   INITIAL_SPAWN_VALUES: [1, 2, 4],
 
-  // Phase 2: Dynamic grid configuration
+  // Dynamic grid configuration
   VIEWPORT_BUFFER: 2, // Extra cells to render beyond viewport for smooth movement
 
   // Token Spawning
@@ -257,7 +304,7 @@ const CONFIG = {
       2: 0.3,
       4: 0.1,
     },
-    // Area where tokens can spawn - now relative to player position
+    // Area where tokens can spawn
     SPAWN_RADIUS: 8,
   },
 
@@ -333,7 +380,7 @@ function validateMapInitialized(): void {
 // =============================================
 
 function updateInteractionRangeDisplay(): void {
-  for (const cell of gameState.grid.values()) {
+  for (const cell of activeCells.values()) {
     if (cell.element) {
       updateCellVisualization(cell);
     }
@@ -379,11 +426,14 @@ function showVictoryMessage(): void {
 
 function getHighestTokenValue(): number {
   let highest = 0;
-  for (const cell of gameState.grid.values()) {
+
+  // Only check currently active cells
+  for (const cell of activeCells.values()) {
     if (cell.token && cell.token.value > highest) {
       highest = cell.token.value;
     }
   }
+
   if (
     gameState.player.inventory && gameState.player.inventory.value > highest
   ) {
@@ -500,7 +550,7 @@ function dropTokenToCell(cell: GridCell): boolean {
     return false;
   }
 
-  // If cell has a token, attempt merge instead of simple drop
+  // If cell has a token, attempt merge
   if (cell.token) {
     if (attemptMerge(cell)) {
       return true;
@@ -569,7 +619,7 @@ function shouldSpawnToken(i: number, j: number): boolean {
 
   if (!withinSpawnRadius) return false;
 
-  // Use deterministic luck based on cell coordinates
+  // Deterministic spawning based on coordinates
   const spawnSeed = `${i},${j}`;
   const spawnRoll = luck(spawnSeed);
 
@@ -606,20 +656,8 @@ function spawnTokenInCell(i: number, j: number): Token | null {
 }
 
 function initializeTokenSpawning() {
-  console.log("Token spawning system ready - tokens will spawn dynamically");
-}
-
-function _logTokenDistribution() {
-  const distribution: { [key: number]: number } = {};
-
-  for (const cell of gameState.grid.values()) {
-    if (cell.token) {
-      const value = cell.token.value;
-      distribution[value] = (distribution[value] || 0) + 1;
-    }
-  }
-
-  console.log("Token value distribution:", distribution);
+  console.log("Stateless token spawning system ready");
+  console.log("Tokens will regenerate fresh every time cells respawn");
 }
 
 // =============================================
@@ -643,19 +681,11 @@ function isPlayerHoldingToken(): boolean {
   return gameState.player.inventory !== null;
 }
 
-function _canCellAcceptDrop(cell: GridCell): boolean {
-  return isCellInteractable(cell) && !hasToken(cell);
-}
-
 function isMergeTarget(cell: GridCell): boolean {
   return isCellInteractable(cell) &&
     hasToken(cell) &&
     isPlayerHoldingToken() &&
     canMergeTokens(gameState.player.inventory!, cell.token!);
-}
-
-function _shouldHighlightCell(cell: GridCell): boolean {
-  return isCellInteractable(cell) && (hasToken(cell) || isPlayerHoldingToken());
 }
 
 // =============================================
@@ -714,7 +744,7 @@ function getTooltipOptions(cell: GridCell): leaflet.TooltipOptions {
 }
 
 // =============================================
-// GLOBAL STATE
+// STATELESS CELLS
 // =============================================
 
 const gameState: GameState = {
@@ -723,7 +753,8 @@ const gameState: GameState = {
     location: CONFIG.CLASSROOM_LOCATION,
     points: 0,
   },
-  grid: new Map<string, GridCell>(),
+  // Remove persistent grid storage
+  visibleCells: new Set<CellKey>(), // Only track which cells are currently visible
   victoryCondition: CONFIG.VICTORY_THRESHOLD,
   isVictoryAchieved: false,
 };
@@ -764,7 +795,7 @@ function initializeDOM() {
   const statusPanel = document.createElement("div");
   statusPanel.id = "statusPanel";
   statusPanel.innerHTML = "Points: 0 | Goal: Reach value " +
-    CONFIG.VICTORY_THRESHOLD;
+    CONFIG.VICTORY_THRESHOLD + " | Highest: 0";
   document.body.appendChild(statusPanel);
 }
 
@@ -792,27 +823,6 @@ function initializeMap(): leaflet.Map {
   playerMarker.addTo(mapInstance);
 
   return mapInstance;
-}
-
-// =============================================
-// GRID SYSTEM
-// =============================================
-
-function _generateCellKey(i: number, j: number): string {
-  return cellToKey(i, j);
-}
-
-function _calculateCellBounds(i: number, j: number): leaflet.LatLngBounds {
-  return cellToWorldBounds(i, j);
-}
-
-function _isWithinInteractionRange(cellI: number, cellJ: number): boolean {
-  const playerCell = worldToCell(
-    gameState.player.location.lat,
-    gameState.player.location.lng,
-  );
-  const distance = cellDistance(playerCell, { i: cellI, j: cellJ });
-  return distance <= CONFIG.INTERACTION_RANGE;
 }
 
 // =============================================
@@ -848,10 +858,10 @@ function updateCellVisualization(cell: GridCell) {
 }
 
 function initializeGridSystem() {
-  console.log("Initializing dynamic grid system...");
+  console.log("Initializing memoryless grid system...");
   validateMapInitialized();
 
-  // Initial grid setup using viewport-based loading
+  cleanupAllCells();
   updateCellVisibility();
 }
 
@@ -960,9 +970,6 @@ function setupMapBoundaryHandling() {
 
   // Set up moveend event for dynamic grid loading
   map.on("moveend", handleMapMove);
-
-  // Remove fixed bounds for infinite world
-  // map.setMaxBounds(null);
 }
 
 // =============================================
@@ -978,13 +985,11 @@ function updateUI() {
     } else {
       let statusText = `Points: ${gameState.player.points} | ` +
         `Goal: Create a ${CONFIG.VICTORY_THRESHOLD} token | ` +
-        `Range: ${CONFIG.INTERACTION_RANGE} cells | ` +
-        `Visible Cells: ${gameState.grid.size}`;
+        `Range: ${CONFIG.INTERACTION_RANGE} cells`;
 
       const highestToken = getHighestTokenValue();
-      if (highestToken > 4) {
-        statusText += ` | Highest: ${highestToken}`;
-      }
+
+      statusText += ` | Highest: ${highestToken}`;
 
       statusPanel.innerHTML = statusText;
       statusPanel.style.color = "";

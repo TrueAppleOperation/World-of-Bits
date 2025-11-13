@@ -54,7 +54,7 @@ D3b:
 - Implement viewport-based cell loading - replace CONFIG.GRID_RENDER_RADIUS
 - Create a cell lifecycle management
 
-9.[] Memoryless Cell Behavior
+9.[X] Memoryless Cell Behavior
 
 - Implement stateless cell system
 - Mod token spawning for dynamic grid
