@@ -63,3 +63,5 @@ D3b:
 
 - Implement map movement detection - Set up moveend
 - Add movement controls
+
+D3c:

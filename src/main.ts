@@ -1,18 +1,12 @@
 // @deno-types="npm:@types/leaflet"
 import leaflet from "leaflet";
-
-// Style sheets
 import "leaflet/dist/leaflet.css";
+import "./_leafletWorkaround.ts";
+import luck from "./_luck.ts";
 import "./style.css";
 
-// Fix missing marker images
-import "./_leafletWorkaround.ts";
-
-// Import our luck function for deterministic spawning
-import luck from "./_luck.ts";
-
 // =============================================
-// CORE INTERFACES & TYPE DEFINITIONS
+// INTERFACES & TYPES
 // =============================================
 
 interface Token {
@@ -29,8 +23,7 @@ interface CellCoordinates {
   j: number;
 }
 
-// Unique identifier for grid cells
-type CellKey = string; // "i,j" format
+type CellKey = string;
 
 interface GridCell {
   i: number;
@@ -47,26 +40,65 @@ interface GameState {
     location: leaflet.LatLng;
     points: number;
   };
-  // Remove persistent grid storage
-  visibleCells: Set<CellKey>; // Track currently visible cells for cleanup
+  visibleCells: Set<CellKey>;
   victoryCondition: number;
   isVictoryAchieved: boolean;
 }
 
 // =============================================
+// CONFIGURATION
+// =============================================
+
+interface CellStyle {
+  color: string;
+  weight: number;
+  fillOpacity: number;
+}
+
+const CONFIG = {
+  CLASSROOM_LOCATION: leaflet.latLng(36.997936938057016, -122.05703507501151),
+  ZOOM_LEVEL: 19,
+  TILE_DEGREES: 1e-4,
+  INTERACTION_RANGE: 3,
+  VICTORY_THRESHOLD: 2048,
+  VIEWPORT_BUFFER: 2,
+  SPAWN: {
+    PROBABILITY: 0.15,
+    VALUE_DISTRIBUTION: { 1: 0.6, 2: 0.3, 4: 0.1 },
+    SPAWN_RADIUS: 8,
+  },
+  CELL_STYLES: {
+    default: { color: "#3388ff", weight: 1, fillOpacity: 0.1 } as CellStyle,
+    withToken: { color: "#ff3388", weight: 2, fillOpacity: 0.3 } as CellStyle,
+    interactable: {
+      color: "#33ff88",
+      weight: 2,
+      fillOpacity: 0.2,
+    } as CellStyle,
+    holdingToken: {
+      color: "#ffaa00",
+      weight: 3,
+      fillOpacity: 0.4,
+    } as CellStyle,
+    mergeTarget: { color: "#aa00ff", weight: 4, fillOpacity: 0.5 } as CellStyle,
+  },
+  UI: {
+    HIGHLIGHT_DURATION_MS: 500,
+    TOOLTIP_CLASS: "cell-tooltip",
+    INVENTORY_CLASS: "inventory-display",
+  },
+} as const;
+
+// =============================================
 // COORDINATE CONVERSION
 // =============================================
 
-// Convert world coordinates (lat/lng) to grid cell coordinates
-// Uses Null Island (0,0) as the anchor point
 function worldToCell(lat: number, lng: number): CellCoordinates {
   const i = Math.floor(lat / CONFIG.TILE_DEGREES);
   const j = Math.floor(lng / CONFIG.TILE_DEGREES);
   return { i, j };
 }
 
-// Convert grid cell coordinates to world bounds (LatLngBounds)
-// Returns the geographic bounds of the specified cell
 function cellToWorldBounds(i: number, j: number): leaflet.LatLngBounds {
   const southWest = leaflet.latLng(
     i * CONFIG.TILE_DEGREES,
@@ -79,37 +111,19 @@ function cellToWorldBounds(i: number, j: number): leaflet.LatLngBounds {
   return leaflet.latLngBounds(southWest, northEast);
 }
 
-// Convert cell coordinates to a unique string key
 function cellToKey(i: number, j: number): CellKey {
   return `${i},${j}`;
 }
 
-// Convert cell key back to coordinates
-function _keyToCell(key: CellKey): CellCoordinates {
-  const [i, j] = key.split(",").map(Number);
-  return { i, j };
-}
-
-// Get the world coordinates for the center of a cell
-function _cellToWorldCenter(i: number, j: number): WorldCoordinates {
-  return {
-    lat: (i + 0.5) * CONFIG.TILE_DEGREES,
-    lng: (j + 0.5) * CONFIG.TILE_DEGREES,
-  };
-}
-
-// Calculate the distance between two cells in grid units
 function cellDistance(cell1: CellCoordinates, cell2: CellCoordinates): number {
   return Math.max(Math.abs(cell1.i - cell2.i), Math.abs(cell1.j - cell2.j));
 }
 
-// Get all cells within a specified radius of a target cell
-function getCellsInRadius(
+function _getCellsInRadius(
   center: CellCoordinates,
   radius: number,
 ): CellCoordinates[] {
   const cells: CellCoordinates[] = [];
-
   for (let i = center.i - radius; i <= center.i + radius; i++) {
     for (let j = center.j - radius; j <= center.j + radius; j++) {
       if (cellDistance(center, { i, j }) <= radius) {
@@ -117,64 +131,45 @@ function getCellsInRadius(
       }
     }
   }
-
   return cells;
 }
 
 // =============================================
-// MEMORYLESS CELL BEHAVIOR SYSTEM
+// CELL MANAGEMENT
 // =============================================
 
 const activeCells = new Map<CellKey, GridCell>();
 
-// Check if a cell is currently active (visible on map)
 function isCellActive(cellKey: CellKey): boolean {
   return activeCells.has(cellKey);
 }
 
-// Get an active cell, or create a new one with fresh state
 function getOrCreateCell(i: number, j: number): GridCell {
   const cellKey = cellToKey(i, j);
-
-  // If cell is already active, return it
   if (activeCells.has(cellKey)) {
     return activeCells.get(cellKey)!;
   }
-
-  // Create a fresh cell with new state
   return spawnCell(i, j);
 }
 
-// Spawn a new cell with completely fresh state
 function spawnCell(i: number, j: number): GridCell {
   const bounds = cellToWorldBounds(i, j);
+  const token = spawnTokenInCell(i, j);
 
   const newCell: GridCell = {
     i,
     j,
-    token: null, // Always start with no token
+    token,
     bounds,
     element: null,
     isVisible: true,
   };
 
-  const token = spawnTokenInCell(i, j);
-  if (token) {
-    newCell.token = token;
-  }
-
-  // Create visual element
   newCell.element = createCellElement(newCell);
-
-  // Add to active cells cache
   const cellKey = cellToKey(i, j);
   activeCells.set(cellKey, newCell);
   gameState.visibleCells.add(cellKey);
 
-  console.log(
-    `Spawned fresh cell (${i}, ${j}) with token:`,
-    token?.value || "none",
-  );
   return newCell;
 }
 
@@ -182,50 +177,35 @@ function despawnCell(cellKey: CellKey): void {
   const cell = activeCells.get(cellKey);
   if (!cell) return;
 
-  // Remove from map
   if (cell.element) {
     map.removeLayer(cell.element);
   }
 
-  // Remove cell from memory
   activeCells.delete(cellKey);
   gameState.visibleCells.delete(cellKey);
-
-  console.log(`Completely despawned cell ${cellKey} - state reset`);
 }
 
-// Clean up all active cells
 function cleanupAllCells(): void {
-  console.log("Cleaning up all cells...");
-
-  for (const [_cellKey, cell] of activeCells.entries()) {
+  for (const cell of activeCells.values()) {
     if (cell.element) {
       map.removeLayer(cell.element);
     }
   }
-
   activeCells.clear();
   gameState.visibleCells.clear();
-
-  console.log("All cells cleaned up - fresh state ready");
 }
 
 // =============================================
-// DYNAMIC GRID MANAGEMENT SYSTEM
+// GRID VISIBILITY MANAGEMENT
 // =============================================
 
-// Get the range of cells currently visible in the map viewport
-function getVisibleCellRange(
-  map: leaflet.Map,
-): { minI: number; maxI: number; minJ: number; maxJ: number } {
+function getVisibleCellRange(map: leaflet.Map) {
   const bounds = map.getBounds();
   const southWest = bounds.getSouthWest();
   const northEast = bounds.getNorthEast();
 
   const minCell = worldToCell(southWest.lat, southWest.lng);
   const maxCell = worldToCell(northEast.lat, northEast.lng);
-
-  // Add buffer cells around the edges to ensure smooth rendering during movement
   const buffer = CONFIG.VIEWPORT_BUFFER;
 
   return {
@@ -240,389 +220,47 @@ function updateCellVisibility(): void {
   const visibleRange = getVisibleCellRange(map);
   const currentlyVisible = new Set<string>();
 
-  // Spawn new cells in visible range
   for (let i = visibleRange.minI; i <= visibleRange.maxI; i++) {
     for (let j = visibleRange.minJ; j <= visibleRange.maxJ; j++) {
       const cellKey = cellToKey(i, j);
       currentlyVisible.add(cellKey);
 
       if (!isCellActive(cellKey)) {
-        // Create fresh cells
         getOrCreateCell(i, j);
       } else {
-        // Cell is already active, ensure it's marked as visible
         const cell = activeCells.get(cellKey)!;
         cell.isVisible = true;
       }
     }
   }
 
-  // Despawn cells that are no longer visible
   for (const cellKey of activeCells.keys()) {
     if (!currentlyVisible.has(cellKey)) {
       despawnCell(cellKey);
     }
   }
-
-  console.log(`Grid updated: ${activeCells.size} active cells`);
 }
 
-// Handle map movement and update grid accordingly
 function handleMapMove(): void {
-  console.log("Map moved, updating grid with fresh cells...");
   updateCellVisibility();
   updateInteractionRangeDisplay();
 }
 
 // =============================================
-// GAME CONSTANTS & CONFIGURATION
-// =============================================
-
-// Define cell styles
-interface CellStyle {
-  color: string;
-  weight: number;
-  fillOpacity: number;
-}
-
-const CONFIG = {
-  CLASSROOM_LOCATION: leaflet.latLng(36.997936938057016, -122.05703507501151),
-  ZOOM_LEVEL: 19,
-  TILE_DEGREES: 1e-4,
-  INTERACTION_RANGE: 3,
-  VICTORY_THRESHOLD: 2048,
-  INITIAL_SPAWN_VALUES: [1, 2, 4],
-
-  // Dynamic grid configuration
-  VIEWPORT_BUFFER: 2,
-
-  // Token Spawning
-  SPAWN: {
-    PROBABILITY: 0.15,
-    VALUE_DISTRIBUTION: {
-      1: 0.6,
-      2: 0.3,
-      4: 0.1,
-    },
-    // Area where tokens can spawn
-    SPAWN_RADIUS: 8,
-  },
-
-  CELL_STYLES: {
-    default: { color: "#3388ff", weight: 1, fillOpacity: 0.1 } as CellStyle,
-    withToken: { color: "#ff3388", weight: 2, fillOpacity: 0.3 } as CellStyle,
-    interactable: {
-      color: "#33ff88",
-      weight: 2,
-      fillOpacity: 0.2,
-    } as CellStyle,
-    // New style for when player is holding a token
-    holdingToken: {
-      color: "#ffaa00",
-      weight: 3,
-      fillOpacity: 0.4,
-    } as CellStyle,
-    // Style for cells that can be merged into
-    mergeTarget: {
-      color: "#aa00ff",
-      weight: 4,
-      fillOpacity: 0.5,
-    } as CellStyle,
-  },
-  UI: {
-    HIGHLIGHT_DURATION_MS: 500,
-    TOOLTIP_CLASS: "cell-tooltip",
-    INVENTORY_CLASS: "inventory-display",
-  },
-} as const;
-
-// =============================================
-// ERROR HANDLING
-// =============================================
-
-class GameError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GameError";
-  }
-}
-
-function getElementOrThrow(id: string): HTMLElement {
-  const element = document.getElementById(id);
-  if (!element) {
-    throw new GameError(`Required DOM element with id '${id}' not found`);
-  }
-  return element;
-}
-
-function validateCell(cell: GridCell): void {
-  if (!cell) {
-    throw new GameError("Cell cannot be null or undefined");
-  }
-  if (cell.bounds === undefined) {
-    throw new GameError("Cell bounds are undefined");
-  }
-  if (typeof cell.i !== "number" || typeof cell.j !== "number") {
-    throw new GameError("Cell coordinates must be numbers");
-  }
-}
-
-function validateMapInitialized(): void {
-  if (!map) {
-    throw new GameError(
-      "Map must be initialized before performing this operation",
-    );
-  }
-}
-
-// =============================================
-// INTERACTION RANGE/GAME LOGIC
-// =============================================
-
-function updateInteractionRangeDisplay(): void {
-  for (const cell of activeCells.values()) {
-    if (cell.element) {
-      updateCellVisualization(cell);
-    }
-  }
-}
-
-function _getInteractionRangeBounds(): leaflet.LatLngBounds {
-  const playerCell = worldToCell(
-    gameState.player.location.lat,
-    gameState.player.location.lng,
-  );
-
-  const interactionCells = getCellsInRadius(
-    playerCell,
-    CONFIG.INTERACTION_RANGE,
-  );
-  const bounds = leaflet.latLngBounds([]);
-
-  for (const cell of interactionCells) {
-    const cellBounds = cellToWorldBounds(cell.i, cell.j);
-    bounds.extend(cellBounds);
-  }
-
-  return bounds;
-}
-
-function showVictoryMessage(): void {
-  if (gameState.isVictoryAchieved) {
-    // Victory feedback
-    const statusPanel = getElementOrThrow("statusPanel");
-    statusPanel.innerHTML = `🎉 VICTORY ACHIEVED! 🎉<br>` +
-      `Final Score: ${gameState.player.points} points<br>` +
-      `You created a token with value ${CONFIG.VICTORY_THRESHOLD}+!`;
-
-    statusPanel.style.color = "green";
-    statusPanel.style.fontWeight = "bold";
-    statusPanel.style.fontSize = "1.2em";
-    statusPanel.style.textAlign = "center";
-
-    console.log("🎊 VICTORY CELEBRATION! 🎊");
-  }
-}
-
-function getHighestTokenValue(): number {
-  let highest = 0;
-
-  // Only check currently active cells
-  for (const cell of activeCells.values()) {
-    if (cell.token && cell.token.value > highest) {
-      highest = cell.token.value;
-    }
-  }
-
-  if (
-    gameState.player.inventory && gameState.player.inventory.value > highest
-  ) {
-    highest = gameState.player.inventory.value;
-  }
-  return highest;
-}
-
-// =============================================
-// CRAFTING & MERGING MECHANICS
-// =============================================
-
-function canMergeTokens(heldToken: Token, cellToken: Token): boolean {
-  return heldToken.value === cellToken.value;
-}
-
-function mergeTokens(heldToken: Token, cellToken: Token): Token {
-  const newValue = heldToken.value * 2;
-  console.log(
-    `Merging tokens: ${heldToken.value} + ${cellToken.value} = ${newValue}`,
-  );
-
-  // Award points based on the new token value
-  gameState.player.points += newValue;
-
-  return { value: newValue };
-}
-
-function attemptMerge(cell: GridCell): boolean {
-  if (!gameState.player.inventory || !cell.token) {
-    return false;
-  }
-
-  if (!canMergeTokens(gameState.player.inventory, cell.token)) {
-    return false;
-  }
-
-  // Perform the merge
-  const newToken = mergeTokens(gameState.player.inventory, cell.token);
-  cell.token = newToken;
-  gameState.player.inventory = null;
-
-  // Update visuals
-  updateCellVisualization(cell);
-  updateInventoryDisplay();
-  updateUI();
-
-  console.log(`Successfully merged tokens! New token value: ${newToken.value}`);
-
-  // Check for victory condition
-  checkVictoryCondition(newToken);
-
-  return true;
-}
-
-function checkVictoryCondition(newToken: Token): void {
-  if (
-    newToken.value >= CONFIG.VICTORY_THRESHOLD && !gameState.isVictoryAchieved
-  ) {
-    gameState.isVictoryAchieved = true;
-    updateUI();
-    // Show victory message
-    const statusPanel = getElementOrThrow("statusPanel");
-    statusPanel.innerHTML += ` 🎉 VICTORY!`;
-  }
-}
-
-function getMergeTooltipContent(cell: GridCell): string {
-  if (!gameState.player.inventory || !cell.token) {
-    return createTooltipContent(cell);
-  }
-
-  if (canMergeTokens(gameState.player.inventory, cell.token)) {
-    const newValue = gameState.player.inventory.value * 2;
-    return `Merge: ${gameState.player.inventory.value} + ${cell.token.value} = ${newValue}`;
-  } else {
-    return `Cannot merge: ${gameState.player.inventory.value} ≠ ${cell.token.value}`;
-  }
-}
-
-// =============================================
-// INVENTORY MANAGEMENT
-// =============================================
-
-function canPickupToken(cell: GridCell): boolean {
-  return isCellInteractable(cell) &&
-    hasToken(cell) &&
-    gameState.player.inventory === null;
-}
-
-function pickupTokenFromCell(cell: GridCell): void {
-  if (!canPickupToken(cell)) {
-    console.warn("Cannot pickup token from cell:", cell);
-    return;
-  }
-
-  // Move token from cell to player inventory
-  gameState.player.inventory = cell.token;
-  cell.token = null;
-
-  // Update visuals
-  updateCellVisualization(cell);
-  updateInventoryDisplay();
-
-  console.log(
-    `Picked up token (value: ${
-      gameState.player.inventory!.value
-    }) from cell (${cell.i}, ${cell.j})`,
-  );
-}
-
-function dropTokenToCell(cell: GridCell): boolean {
-  if (!isCellInteractable(cell) || gameState.player.inventory === null) {
-    return false;
-  }
-
-  // If cell has a token, attempt merge
-  if (cell.token) {
-    if (attemptMerge(cell)) {
-      return true;
-    } else {
-      // Cannot merge
-      console.log("Cannot merge tokens with different values");
-      return false;
-    }
-  }
-
-  // Simple drop to empty cell
-  cell.token = gameState.player.inventory;
-  gameState.player.inventory = null;
-
-  // Update visuals
-  updateCellVisualization(cell);
-  updateInventoryDisplay();
-
-  console.log(
-    `Dropped token (value: ${
-      cell.token!.value
-    }) to cell (${cell.i}, ${cell.j})`,
-  );
-  return true;
-}
-
-function getInventoryDisplayText(): string {
-  const inventory = gameState.player.inventory;
-  if (!inventory) {
-    return "Inventory: Empty";
-  }
-  return `Inventory: Token (Value: ${inventory.value})`;
-}
-
-function updateInventoryDisplay(): void {
-  try {
-    const inventoryDisplay = getElementOrThrow("inventoryDisplay");
-    inventoryDisplay.textContent = getInventoryDisplayText();
-
-    // Add visual feedback when holding a token
-    if (gameState.player.inventory) {
-      inventoryDisplay.style.fontWeight = "bold";
-      inventoryDisplay.style.color = "#ffaa00";
-    } else {
-      inventoryDisplay.style.fontWeight = "normal";
-      inventoryDisplay.style.color = "";
-    }
-  } catch (error) {
-    console.error("Failed to update inventory display:", error);
-  }
-}
-
-// =============================================
-// TOKEN SPAWNING LOGIC
+// TOKEN SPAWNING
 // =============================================
 
 function shouldSpawnToken(i: number, j: number): boolean {
-  // Use player's current position for spawn radius calculation
   const playerCell = worldToCell(
     gameState.player.location.lat,
     gameState.player.location.lng,
   );
-
   const distance = cellDistance(playerCell, { i, j });
   const withinSpawnRadius = distance <= CONFIG.SPAWN.SPAWN_RADIUS;
-
   if (!withinSpawnRadius) return false;
 
-  // Deterministic spawning based on coordinates
   const spawnSeed = `${i},${j}`;
   const spawnRoll = luck(spawnSeed);
-
   return spawnRoll < CONFIG.SPAWN.PROBABILITY;
 }
 
@@ -641,8 +279,6 @@ function determineTokenValue(i: number, j: number): number {
       return parseInt(value);
     }
   }
-
-  // Fallback to value 1
   return 1;
 }
 
@@ -650,18 +286,12 @@ function spawnTokenInCell(i: number, j: number): Token | null {
   if (!shouldSpawnToken(i, j)) {
     return null;
   }
-
   const value = determineTokenValue(i, j);
   return { value };
 }
 
-function initializeTokenSpawning() {
-  console.log("Stateless token spawning system ready");
-  console.log("Tokens will regenerate fresh every time cells respawn");
-}
-
 // =============================================
-// CONDITION EXTRACTION
+// GAME LOGIC
 // =============================================
 
 function isCellInteractable(cell: GridCell): boolean {
@@ -685,11 +315,87 @@ function isMergeTarget(cell: GridCell): boolean {
   return isCellInteractable(cell) &&
     hasToken(cell) &&
     isPlayerHoldingToken() &&
-    canMergeTokens(gameState.player.inventory!, cell.token!);
+    gameState.player.inventory!.value === cell.token!.value;
+}
+
+function canMergeTokens(heldToken: Token, cellToken: Token): boolean {
+  return heldToken.value === cellToken.value;
+}
+
+function mergeTokens(heldToken: Token, cellToken: Token): Token {
+  const newValue = heldToken.value * 2;
+  console.log(
+    `Merging tokens: ${heldToken.value} + ${cellToken.value} = ${newValue}`,
+  );
+  gameState.player.points += newValue;
+  return { value: newValue };
+}
+
+function attemptMerge(cell: GridCell): boolean {
+  if (!gameState.player.inventory || !cell.token) return false;
+  if (!canMergeTokens(gameState.player.inventory, cell.token)) return false;
+
+  const newToken = mergeTokens(gameState.player.inventory, cell.token);
+  cell.token = newToken;
+  gameState.player.inventory = null;
+
+  updateCellVisualization(cell);
+  updateInventoryDisplay();
+  updateUI();
+
+  console.log(`Successful merge. New token value: ${newToken.value}`);
+  checkVictoryCondition(newToken);
+  return true;
+}
+
+function checkVictoryCondition(newToken: Token): void {
+  if (
+    newToken.value >= CONFIG.VICTORY_THRESHOLD && !gameState.isVictoryAchieved
+  ) {
+    gameState.isVictoryAchieved = true;
+    updateUI();
+  }
 }
 
 // =============================================
-// STYLE MANAGEMENT
+// INVENTORY MANAGEMENT
+// =============================================
+
+function canPickupToken(cell: GridCell): boolean {
+  return isCellInteractable(cell) && hasToken(cell) && !isPlayerHoldingToken();
+}
+
+function pickupTokenFromCell(cell: GridCell): void {
+  if (!canPickupToken(cell)) {
+    console.warn("Cannot pickup token from cell:", cell);
+    return;
+  }
+
+  gameState.player.inventory = cell.token;
+  cell.token = null;
+
+  updateCellVisualization(cell);
+  updateInventoryDisplay();
+}
+
+function dropTokenToCell(cell: GridCell): boolean {
+  if (!isCellInteractable(cell) || !gameState.player.inventory) return false;
+
+  if (cell.token) {
+    return attemptMerge(cell);
+  }
+
+  cell.token = gameState.player.inventory;
+  gameState.player.inventory = null;
+
+  updateCellVisualization(cell);
+  updateInventoryDisplay();
+
+  return true;
+}
+
+// =============================================
+// VISUALIZATION
 // =============================================
 
 function getCellStyle(cell: GridCell): CellStyle {
@@ -715,24 +421,20 @@ function getCellStyle(cell: GridCell): CellStyle {
 }
 
 function createTooltipContent(cell: GridCell): string {
-  if (isMergeTarget(cell)) {
-    return getMergeTooltipContent(cell);
+  if (isMergeTarget(cell) && gameState.player.inventory && cell.token) {
+    const newValue = gameState.player.inventory.value * 2;
+    return `Merge: ${gameState.player.inventory.value} + ${cell.token.value} = ${newValue}`;
   }
 
   if (hasToken(cell) && cell.token) {
     return `${cell.token.value}`;
   }
 
-  if (isPlayerHoldingToken() && isCellInteractable(cell)) {
-    return ``;
-  }
-
-  return `Cell (${cell.i},${cell.j})`;
+  return ``;
 }
 
 function getTooltipOptions(cell: GridCell): leaflet.TooltipOptions {
-  const hasCellToken = hasToken(cell);
-  const shouldShowPermanent = hasCellToken ||
+  const shouldShowPermanent = hasToken(cell) ||
     (isPlayerHoldingToken() && isCellInteractable(cell)) ||
     isMergeTarget(cell);
 
@@ -743,8 +445,39 @@ function getTooltipOptions(cell: GridCell): leaflet.TooltipOptions {
   };
 }
 
+function createCellElement(cell: GridCell): leaflet.Rectangle {
+  if (!map) throw new Error("Map not initialized");
+  if (!cell.bounds) throw new Error("Cell bounds undefined");
+
+  const style = getCellStyle(cell);
+  const rectangle = leaflet.rectangle(cell.bounds, style);
+
+  rectangle.addTo(map);
+  rectangle.bindTooltip(createTooltipContent(cell), getTooltipOptions(cell));
+  rectangle.on("click", () => handleCellClick(cell));
+
+  return rectangle;
+}
+
+function updateCellVisualization(cell: GridCell) {
+  if (!map) throw new Error("Map not initialized");
+
+  if (cell.element) {
+    map.removeLayer(cell.element);
+  }
+  cell.element = createCellElement(cell);
+}
+
+function updateInteractionRangeDisplay(): void {
+  for (const cell of activeCells.values()) {
+    if (cell.element) {
+      updateCellVisualization(cell);
+    }
+  }
+}
+
 // =============================================
-// PHASE 4: PLAYER MOVEMENT CONTROLS
+// PLAYER MOVEMENT
 // =============================================
 
 function addMovementControls(): void {
@@ -764,31 +497,17 @@ function addMovementControls(): void {
     </div>
   `;
 
-  const controlPanel = getElementOrThrow("controlPanel");
-  controlPanel.appendChild(movementPanel);
+  document.getElementById("controlPanel")!.appendChild(movementPanel);
 }
 
 function setupMovementControls(): void {
-  getElementOrThrow("moveNorth").addEventListener(
-    "click",
-    () => movePlayer("north"),
-  );
-  getElementOrThrow("moveSouth").addEventListener(
-    "click",
-    () => movePlayer("south"),
-  );
-  getElementOrThrow("moveEast").addEventListener(
-    "click",
-    () => movePlayer("east"),
-  );
-  getElementOrThrow("moveWest").addEventListener(
-    "click",
-    () => movePlayer("west"),
-  );
-  getElementOrThrow("moveCenter").addEventListener(
-    "click",
-    () => movePlayer("center"),
-  );
+  const get = (id: string) => document.getElementById(id)!;
+
+  get("moveNorth").addEventListener("click", () => movePlayer("north"));
+  get("moveSouth").addEventListener("click", () => movePlayer("south"));
+  get("moveEast").addEventListener("click", () => movePlayer("east"));
+  get("moveWest").addEventListener("click", () => movePlayer("west"));
+  get("moveCenter").addEventListener("click", () => movePlayer("center"));
 }
 
 function movePlayer(
@@ -816,17 +535,147 @@ function movePlayer(
       break;
   }
 
-  // Update player location
   gameState.player.location = leaflet.latLng(newLat, newLng);
-
-  // Move map to new location
   map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL);
-
   console.log(`Player moved ${direction} to:`, gameState.player.location);
 }
 
 // =============================================
-// STATELESS CELLS
+// UI MANAGEMENT
+// =============================================
+
+function getInventoryDisplayText(): string {
+  const inventory = gameState.player.inventory;
+  return inventory
+    ? `Inventory: Token (Value: ${inventory.value})`
+    : "Inventory: Empty";
+}
+
+function updateInventoryDisplay(): void {
+  const inventoryDisplay = document.getElementById("inventoryDisplay");
+  if (!inventoryDisplay) return;
+
+  inventoryDisplay.textContent = getInventoryDisplayText();
+
+  if (gameState.player.inventory) {
+    inventoryDisplay.style.fontWeight = "bold";
+    inventoryDisplay.style.color = "#ffaa00";
+  } else {
+    inventoryDisplay.style.fontWeight = "normal";
+    inventoryDisplay.style.color = "";
+  }
+}
+
+function getHighestTokenValue(): number {
+  let highest = 0;
+  for (const cell of activeCells.values()) {
+    if (cell.token && cell.token.value > highest) {
+      highest = cell.token.value;
+    }
+  }
+  if (
+    gameState.player.inventory && gameState.player.inventory.value > highest
+  ) {
+    highest = gameState.player.inventory.value;
+  }
+  return highest;
+}
+
+function showVictoryMessage(): void {
+  if (!gameState.isVictoryAchieved) return;
+
+  const statusPanel = document.getElementById("statusPanel");
+  if (!statusPanel) return;
+
+  statusPanel.innerHTML = `🎉 VICTORY ACHIEVED! 🎉<br>` +
+    `Final Score: ${gameState.player.points} points<br>` +
+    `You created a token with value ${CONFIG.VICTORY_THRESHOLD}+!`;
+
+  statusPanel.style.color = "green";
+  statusPanel.style.fontWeight = "bold";
+  statusPanel.style.fontSize = "1.2em";
+  statusPanel.style.textAlign = "center";
+}
+
+function updateUI() {
+  const statusPanel = document.getElementById("statusPanel");
+  if (!statusPanel) return;
+
+  if (gameState.isVictoryAchieved) {
+    showVictoryMessage();
+  } else {
+    const highestToken = getHighestTokenValue();
+    statusPanel.innerHTML = `Points: ${gameState.player.points} | ` +
+      `Goal: Create a ${CONFIG.VICTORY_THRESHOLD} token | ` +
+      `Range: ${CONFIG.INTERACTION_RANGE} cells | Highest: ${highestToken}`;
+  }
+}
+
+// =============================================
+// CELL INTERACTION
+// =============================================
+
+function handleCellClick(cell: GridCell) {
+  console.log(`Cell clicked: (${cell.i}, ${cell.j})`);
+  console.log(`Token in cell:`, cell.token);
+  console.log(`Player inventory:`, gameState.player.inventory);
+  console.log(`Interactable: ${isCellInteractable(cell)}`);
+
+  if (!isCellInteractable(cell)) {
+    provideVisualFeedback(cell, "outOfRange");
+
+    const statusPanel = document.getElementById("statusPanel");
+    if (statusPanel) {
+      const originalText = statusPanel.textContent;
+      statusPanel.textContent =
+        "Too far! You can only interact with cells within 3 tiles.";
+      setTimeout(() => statusPanel.textContent = originalText, 2000);
+    }
+    return;
+  }
+
+  let action: "pickup" | "drop" | "merge" | "invalid" = "invalid";
+  let success = false;
+
+  if (hasToken(cell) && !isPlayerHoldingToken()) {
+    pickupTokenFromCell(cell);
+    action = "pickup";
+    success = true;
+  } else if (hasToken(cell) && isPlayerHoldingToken()) {
+    success = attemptMerge(cell);
+    action = success ? "merge" : "invalid";
+  } else if (!hasToken(cell) && isPlayerHoldingToken()) {
+    success = dropTokenToCell(cell);
+    action = success ? "drop" : "invalid";
+  }
+
+  provideVisualFeedback(cell, action);
+  if (success) updateInteractionRangeDisplay();
+}
+
+function provideVisualFeedback(
+  cell: GridCell,
+  action: "pickup" | "drop" | "merge" | "invalid" | "outOfRange",
+) {
+  if (!cell.element) return;
+
+  const styles = {
+    pickup: { color: "#00ff00", weight: 4 },
+    drop: { color: "#00ffff", weight: 4 },
+    merge: { color: "#aa00ff", weight: 5 },
+    invalid: { color: "#ff0000", weight: 4 },
+    outOfRange: { color: "#888888", weight: 4 },
+  };
+
+  cell.element.setStyle(styles[action]);
+  setTimeout(
+    () => updateCellVisualization(cell),
+    CONFIG.UI.HIGHLIGHT_DURATION_MS,
+  );
+}
+
+// =============================================
+// INITIALIZATION
 // =============================================
 
 const gameState: GameState = {
@@ -835,60 +684,39 @@ const gameState: GameState = {
     location: CONFIG.CLASSROOM_LOCATION,
     points: 0,
   },
-  // Remove persistent grid storage
-  visibleCells: new Set<CellKey>(), // Only track which cells are currently visible
+  visibleCells: new Set<CellKey>(),
   victoryCondition: CONFIG.VICTORY_THRESHOLD,
   isVictoryAchieved: false,
 };
 
 let map: leaflet.Map;
-let playerMarker: leaflet.Marker; // Track player marker for updates
-
-// =============================================
-// DOM ELEMENT SETUP
-// =============================================
+let playerMarker: leaflet.Marker;
 
 function initializeDOM() {
-  document.body.innerHTML = "";
+  document.body.innerHTML = `
+    <div id="controlPanel">
+      <h2>World of Bits Game</h2>
+      <div id="inventoryDisplay" class="${CONFIG.UI.INVENTORY_CLASS}">Inventory: Empty</div>
+      <div id="gameInstructions">
+        <p>Click cells to collect and merge tokens!</p>
+        <p>Goal: Create a token with value ${CONFIG.VICTORY_THRESHOLD}</p>
+        <p><strong>How to play:</strong></p>
+        <ul>
+          <li>Click a token cell to pick it up</li>
+          <li>Click an empty cell to drop your token</li>
+          <li>Click a token cell while holding a token of equal value to merge them</li>
+          <li>Merging creates a new token with doubled value</li>
+          <li>Earn points when you merge tokens!</li>
+          <li>Use the movement buttons to navigate the map</li>
+        </ul>
+      </div>
+    </div>
+    <div id="map"></div>
+    <div id="statusPanel">Points: 0 | Goal: Reach value ${CONFIG.VICTORY_THRESHOLD} | Highest: 0</div>
+  `;
 
-  const controlPanel = document.createElement("div");
-  controlPanel.id = "controlPanel";
-  controlPanel.innerHTML = `
-        <h2>Pokemon Fusion Game</h2>
-        <div id="inventoryDisplay" class="${CONFIG.UI.INVENTORY_CLASS}">Inventory: Empty</div>
-        <div id="gameInstructions">
-            <p>Click cells to collect and merge tokens!</p>
-            <p>Goal: Create a token with value ${CONFIG.VICTORY_THRESHOLD}</p>
-            <p><strong>How to play:</strong></p>
-            <ul>
-                <li>Click a token cell to pick it up</li>
-                <li>Click an empty cell to drop your token</li>
-                <li>Click a token cell while holding a token of equal value to merge them</li>
-                <li>Merging creates a new token with doubled value</li>
-                <li>Earn points when you merge tokens!</li>
-                <li>Use the movement buttons to navigate the map</li>
-            </ul>
-        </div>
-    `;
-  document.body.appendChild(controlPanel);
-
-  // Movement Controls
   addMovementControls();
-
-  const mapContainer = document.createElement("div");
-  mapContainer.id = "map";
-  document.body.appendChild(mapContainer);
-
-  const statusPanel = document.createElement("div");
-  statusPanel.id = "statusPanel";
-  statusPanel.innerHTML = "Points: 0 | Goal: Reach value " +
-    CONFIG.VICTORY_THRESHOLD + " | Highest: 0";
-  document.body.appendChild(statusPanel);
 }
-
-// =============================================
-// MAP INITIALIZATION
-// =============================================
 
 function initializeMap(): leaflet.Map {
   const mapInstance = leaflet.map("map", {
@@ -905,7 +733,6 @@ function initializeMap(): leaflet.Map {
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(mapInstance);
 
-  // Store player marker for later updates
   playerMarker = leaflet.marker(CONFIG.CLASSROOM_LOCATION);
   playerMarker.bindTooltip("Your location");
   playerMarker.addTo(mapInstance);
@@ -913,202 +740,17 @@ function initializeMap(): leaflet.Map {
   return mapInstance;
 }
 
-// =============================================
-// CELL VISUALIZATION & RENDERING
-// =============================================
-
-function createCellElement(cell: GridCell): leaflet.Rectangle {
-  validateMapInitialized();
-  validateCell(cell);
-
-  const style = getCellStyle(cell);
-  const rectangle = leaflet.rectangle(cell.bounds, style);
-
-  rectangle.addTo(map);
-  rectangle.bindTooltip(createTooltipContent(cell), getTooltipOptions(cell));
-
-  rectangle.on("click", () => {
-    handleCellClick(cell);
-  });
-
-  return rectangle;
-}
-
-function updateCellVisualization(cell: GridCell) {
-  validateMapInitialized();
-  validateCell(cell);
-
-  if (cell.element) {
-    map.removeLayer(cell.element);
-  }
-
-  cell.element = createCellElement(cell);
-}
-
-function initializeGridSystem() {
-  console.log("Initializing memoryless grid system...");
-  validateMapInitialized();
-
-  cleanupAllCells();
-  updateCellVisibility();
-}
-
-// =============================================
-// CELL INTERACTION HANDLER
-// =============================================
-
-function handleCellClick(cell: GridCell) {
-  try {
-    validateCell(cell);
-
-    console.log(`Cell clicked: (${cell.i}, ${cell.j})`);
-    console.log(`Token in cell:`, cell.token);
-    console.log(`Player inventory:`, gameState.player.inventory);
-    console.log(`Interactable: ${isCellInteractable(cell)}`);
-
-    if (!isCellInteractable(cell)) {
-      console.log("Cell is not in interaction range");
-      provideVisualFeedback(cell, "outOfRange");
-
-      // Show range information to player
-      const statusPanel = getElementOrThrow("statusPanel");
-      const originalText = statusPanel.textContent;
-      statusPanel.textContent =
-        "Too far! You can only interact with cells within 3 tiles.";
-      setTimeout(() => {
-        statusPanel.textContent = originalText;
-      }, 2000);
-      return;
-    }
-
-    let action: "pickup" | "drop" | "merge" | "invalid" = "invalid";
-    let success = false;
-
-    // Pickup: if cell has token and player has empty inventory
-    if (hasToken(cell) && !isPlayerHoldingToken()) {
-      pickupTokenFromCell(cell);
-      action = "pickup";
-      success = true;
-    } // Merge: if both cell and player have tokens of equal value
-    else if (hasToken(cell) && isPlayerHoldingToken()) {
-      success = attemptMerge(cell);
-      action = success ? "merge" : "invalid";
-    } // Drop: if cell is empty and player has token
-    else if (!hasToken(cell) && isPlayerHoldingToken()) {
-      success = dropTokenToCell(cell);
-      action = success ? "drop" : "invalid";
-    } // Not a valid action
-    else {
-      console.log("No valid action for this cell");
-      action = "invalid";
-    }
-
-    provideVisualFeedback(cell, action);
-
-    // Update interaction range display
-    if (success) {
-      updateInteractionRangeDisplay();
-    }
-  } catch (error) {
-    console.error("Error handling cell click:", error);
-    provideVisualFeedback(cell, "invalid");
-  }
-}
-
-function provideVisualFeedback(
-  cell: GridCell,
-  action: "pickup" | "drop" | "merge" | "invalid" | "outOfRange",
-) {
-  if (!cell.element) return;
-
-  let feedbackColor = "#ffff00"; // Default yellow
-  let feedbackWeight = 4;
-
-  switch (action) {
-    case "pickup":
-      feedbackColor = "#00ff00"; // Green for pickup
-      break;
-    case "drop":
-      feedbackColor = "#00ffff"; // Cyan for drop
-      break;
-    case "merge":
-      feedbackColor = "#aa00ff"; // Purple for merge
-      feedbackWeight = 5;
-      break;
-    case "invalid":
-      feedbackColor = "#ff0000"; // Red for invalid
-      break;
-    case "outOfRange":
-      feedbackColor = "#888888"; // Gray for out of range
-      break;
-  }
-
-  cell.element.setStyle({ color: feedbackColor, weight: feedbackWeight });
-  setTimeout(() => {
-    updateCellVisualization(cell);
-  }, CONFIG.UI.HIGHLIGHT_DURATION_MS);
-}
-
-// =============================================
-// MAP BOUNDARY MANAGEMENT
-// =============================================
-
-function setupMapBoundaryHandling() {
-  validateMapInitialized();
-
-  // Set up moveend event for dynamic grid loading
-  map.on("moveend", handleMapMove);
-}
-
-// =============================================
-// UI UPDATE FUNCTIONS
-// =============================================
-
-function updateUI() {
-  try {
-    const statusPanel = getElementOrThrow("statusPanel");
-
-    if (gameState.isVictoryAchieved) {
-      showVictoryMessage();
-    } else {
-      let statusText = `Points: ${gameState.player.points} | ` +
-        `Goal: Create a ${CONFIG.VICTORY_THRESHOLD} token | ` +
-        `Range: ${CONFIG.INTERACTION_RANGE} cells`;
-
-      const highestToken = getHighestTokenValue();
-
-      statusText += ` | Highest: ${highestToken}`;
-
-      statusPanel.innerHTML = statusText;
-      statusPanel.style.color = "";
-      statusPanel.style.fontWeight = "normal";
-      statusPanel.style.fontSize = "";
-      statusPanel.style.textAlign = "";
-    }
-  } catch (error) {
-    console.error("Failed to update UI:", error);
-  }
-}
-
-// =============================================
-// INITIALIZATION FUNCTION
-// =============================================
-
 function initializeGame() {
   initializeDOM();
   map = initializeMap();
 
   setupMovementControls();
+  cleanupAllCells();
+  updateCellVisibility();
 
-  initializeGridSystem();
-  initializeTokenSpawning();
-  setupMapBoundaryHandling();
+  map.on("moveend", handleMapMove);
   updateInventoryDisplay();
   updateUI();
 }
-
-// =============================================
-// GAME INITIALIZATION
-// =============================================
 
 initializeGame();
