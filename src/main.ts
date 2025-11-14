@@ -25,9 +25,9 @@ interface CellCoordinates {
 
 type CellKey = string;
 
+// Updated GridCell interface to use flyweight coordinates
 interface GridCell {
-  i: number;
-  j: number;
+  coordinates: CellCoordinates; // Flyweight object
   token: Token | null;
   bounds: leaflet.LatLngBounds;
   element: leaflet.Rectangle | null;
@@ -104,6 +104,31 @@ class CellCaretaker {
 
 // Initialize the caretaker globally
 const _cellCaretaker = new CellCaretaker();
+
+// =============================================
+// FLYWEIGHT PATTERN IMPLEMENTATION
+// =============================================
+
+class CellFlyweightFactory {
+  private flyweights = new Map<string, CellCoordinates>();
+
+  getFlyweight(i: number, j: number): CellCoordinates {
+    const key = cellToKey(i, j);
+
+    if (!this.flyweights.has(key)) {
+      this.flyweights.set(key, { i, j });
+    }
+
+    return this.flyweights.get(key)!;
+  }
+
+  getFlyweightCount(): number {
+    return this.flyweights.size;
+  }
+}
+
+// Initialize the flyweight factory globally
+const _cellFlyweightFactory = new CellFlyweightFactory();
 
 // =============================================
 // CONFIGURATION
@@ -206,22 +231,23 @@ function isCellActive(cellKey: CellKey): boolean {
 
 function getOrCreateCell(i: number, j: number): GridCell {
   const cellKey = cellToKey(i, j);
-  
+
   // Check if cell is already active
   if (activeCells.has(cellKey)) {
     return activeCells.get(cellKey)!;
   }
-  
+
   return spawnCell(i, j);
 }
 
 function spawnCell(i: number, j: number): GridCell {
   const bounds = cellToWorldBounds(i, j);
-  
+  const coordinates = _cellFlyweightFactory.getFlyweight(i, j);
+
   // Check for saved state first, otherwise spawn new token
   let token: Token | null = null;
   const isModified = _cellCaretaker.hasState(cellToKey(i, j));
-  
+
   if (isModified) {
     // Restore from memento
     token = _cellCaretaker.restoreState(cellToKey(i, j));
@@ -231,13 +257,12 @@ function spawnCell(i: number, j: number): GridCell {
   }
 
   const newCell: GridCell = {
-    i,
-    j,
+    coordinates,
     token,
     bounds,
     element: null,
     isVisible: true,
-    isModified
+    isModified,
   };
 
   newCell.element = createCellElement(newCell);
@@ -278,7 +303,10 @@ function cleanupAllCells(): void {
 // Function to mark cell as modified and save state
 function markCellAsModified(cell: GridCell): void {
   cell.isModified = true;
-  _cellCaretaker.saveState(cellToKey(cell.i, cell.j), cell.token);
+  _cellCaretaker.saveState(
+    cellToKey(cell.coordinates.i, cell.coordinates.j),
+    cell.token,
+  );
 }
 
 // =============================================
@@ -385,7 +413,10 @@ function isCellInteractable(cell: GridCell): boolean {
     gameState.player.location.lat,
     gameState.player.location.lng,
   );
-  const distance = cellDistance(playerCell, { i: cell.i, j: cell.j });
+  const distance = cellDistance(playerCell, {
+    i: cell.coordinates.i,
+    j: cell.coordinates.j,
+  });
   return distance <= CONFIG.INTERACTION_RANGE;
 }
 
@@ -705,7 +736,7 @@ function updateUI() {
 // =============================================
 
 function handleCellClick(cell: GridCell) {
-  console.log(`Cell clicked: (${cell.i}, ${cell.j})`);
+  console.log(`Cell clicked: (${cell.coordinates.i}, ${cell.coordinates.j})`);
   console.log(`Token in cell:`, cell.token);
   console.log(`Player inventory:`, gameState.player.inventory);
   console.log(`Interactable: ${isCellInteractable(cell)}`);
