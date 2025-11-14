@@ -65,3 +65,27 @@ D3b:
 - Add movement controls
 
 D3c:
+
+11.[ ] Create Memento Classes
+
+- Define CellMemento interface to capture cell state
+- Create CellOriginator class to handle state saving/restoring
+- Implement CellCaretaker to manage mementos storage
+
+12.[ ] Design State Serialization System
+
+- Create serializable cell state representation
+- Implement state preservation for modified cells only
+- Add state restoration when cells return to view
+
+13.[ ] Modify Cell Management for Persistence
+
+- Update cell spawning to check for existing state
+- Memento system with dynamic grid management
+- Stateless behavior for unmodified cells
+
+14.[ ] Implement Flyweight Pattern Optimization
+
+- Separate intrinsic (coordinate) and extrinsic (token) state
+- Ensure cells not visible don't consume memory if unmodified
+- Maintain cell coordinate system as flyweight objects
