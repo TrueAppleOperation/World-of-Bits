@@ -46,6 +46,65 @@ interface GameState {
 }
 
 // =============================================
+// MEMENTO PATTERN IMPLEMENTATION
+// =============================================
+
+interface CellMemento {
+  cellKey: string;
+  token: Token | null;
+  timestamp: number;
+}
+
+class CellOriginator {
+  createMemento(cellKey: string, token: Token | null): CellMemento {
+    return {
+      cellKey,
+      token: token ? { ...token } : null,
+      timestamp: Date.now(),
+    };
+  }
+
+  restoreFromMemento(memento: CellMemento): { token: Token | null } {
+    return {
+      token: memento.token ? { ...memento.token } : null,
+    };
+  }
+}
+
+class CellCaretaker {
+  private mementos = new Map<string, CellMemento>();
+  private originator = new CellOriginator();
+
+  saveState(cellKey: string, token: Token | null): void {
+    const memento = this.originator.createMemento(cellKey, token);
+    this.mementos.set(cellKey, memento);
+  }
+
+  restoreState(cellKey: string): Token | null {
+    const memento = this.mementos.get(cellKey);
+    if (!memento) return null;
+
+    const state = this.originator.restoreFromMemento(memento);
+    return state.token;
+  }
+
+  hasState(cellKey: string): boolean {
+    return this.mementos.has(cellKey);
+  }
+
+  clearState(cellKey: string): void {
+    this.mementos.delete(cellKey);
+  }
+
+  getAllStates(): Map<string, CellMemento> {
+    return new Map(this.mementos);
+  }
+}
+
+// Initialize the caretaker globally
+const _cellCaretaker = new CellCaretaker();
+
+// =============================================
 // CONFIGURATION
 // =============================================
 

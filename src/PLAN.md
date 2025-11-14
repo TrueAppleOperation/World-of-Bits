@@ -66,7 +66,7 @@ D3b:
 
 D3c:
 
-11.[ ] Create Memento Classes
+11.[X] Create Memento Classes
 
 - Define CellMemento interface to capture cell state
 - Create CellOriginator class to handle state saving/restoring
