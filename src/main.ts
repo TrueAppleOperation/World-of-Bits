@@ -294,7 +294,7 @@ const CONFIG = {
   INITIAL_SPAWN_VALUES: [1, 2, 4],
 
   // Dynamic grid configuration
-  VIEWPORT_BUFFER: 2, // Extra cells to render beyond viewport for smooth movement
+  VIEWPORT_BUFFER: 2,
 
   // Token Spawning
   SPAWN: {
@@ -744,6 +744,88 @@ function getTooltipOptions(cell: GridCell): leaflet.TooltipOptions {
 }
 
 // =============================================
+// PHASE 4: PLAYER MOVEMENT CONTROLS
+// =============================================
+
+function addMovementControls(): void {
+  const movementPanel = document.createElement("div");
+  movementPanel.id = "movementPanel";
+  movementPanel.innerHTML = `
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin: 10px 0;">
+      <div></div>
+      <button id="moveNorth">↑ North</button>
+      <div></div>
+      <button id="moveWest">← West</button>
+      <button id="moveCenter">Center</button>
+      <button id="moveEast">→ East</button>
+      <div></div>
+      <button id="moveSouth">↓ South</button>
+      <div></div>
+    </div>
+  `;
+
+  const controlPanel = getElementOrThrow("controlPanel");
+  controlPanel.appendChild(movementPanel);
+}
+
+function setupMovementControls(): void {
+  getElementOrThrow("moveNorth").addEventListener(
+    "click",
+    () => movePlayer("north"),
+  );
+  getElementOrThrow("moveSouth").addEventListener(
+    "click",
+    () => movePlayer("south"),
+  );
+  getElementOrThrow("moveEast").addEventListener(
+    "click",
+    () => movePlayer("east"),
+  );
+  getElementOrThrow("moveWest").addEventListener(
+    "click",
+    () => movePlayer("west"),
+  );
+  getElementOrThrow("moveCenter").addEventListener(
+    "click",
+    () => movePlayer("center"),
+  );
+}
+
+function movePlayer(
+  direction: "north" | "south" | "east" | "west" | "center",
+): void {
+  let newLat = gameState.player.location.lat;
+  let newLng = gameState.player.location.lng;
+
+  switch (direction) {
+    case "north":
+      newLat += CONFIG.TILE_DEGREES;
+      break;
+    case "south":
+      newLat -= CONFIG.TILE_DEGREES;
+      break;
+    case "east":
+      newLng += CONFIG.TILE_DEGREES;
+      break;
+    case "west":
+      newLng -= CONFIG.TILE_DEGREES;
+      break;
+    case "center":
+      newLat = CONFIG.CLASSROOM_LOCATION.lat;
+      newLng = CONFIG.CLASSROOM_LOCATION.lng;
+      break;
+  }
+
+  // Update player location
+  gameState.player.location = leaflet.latLng(newLat, newLng);
+
+  // Move map to new location
+  map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL);
+
+  console.log(`Player moved ${direction} to:`, gameState.player.location);
+}
+
+// =============================================
 // STATELESS CELLS
 // =============================================
 
@@ -760,6 +842,7 @@ const gameState: GameState = {
 };
 
 let map: leaflet.Map;
+let playerMarker: leaflet.Marker; // Track player marker for updates
 
 // =============================================
 // DOM ELEMENT SETUP
@@ -783,10 +866,14 @@ function initializeDOM() {
                 <li>Click a token cell while holding a token of equal value to merge them</li>
                 <li>Merging creates a new token with doubled value</li>
                 <li>Earn points when you merge tokens!</li>
+                <li>Use the movement buttons to navigate the map</li>
             </ul>
         </div>
     `;
   document.body.appendChild(controlPanel);
+
+  // Movement Controls
+  addMovementControls();
 
   const mapContainer = document.createElement("div");
   mapContainer.id = "map";
@@ -818,7 +905,8 @@ function initializeMap(): leaflet.Map {
     attribution: "&copy; OpenStreetMap contributors",
   }).addTo(mapInstance);
 
-  const playerMarker = leaflet.marker(CONFIG.CLASSROOM_LOCATION);
+  // Store player marker for later updates
+  playerMarker = leaflet.marker(CONFIG.CLASSROOM_LOCATION);
   playerMarker.bindTooltip("Your location");
   playerMarker.addTo(mapInstance);
 
@@ -1009,14 +1097,13 @@ function updateUI() {
 function initializeGame() {
   initializeDOM();
   map = initializeMap();
+
+  setupMovementControls();
+
   initializeGridSystem();
-
   initializeTokenSpawning();
-
   setupMapBoundaryHandling();
-
   updateInventoryDisplay();
-
   updateUI();
 }
 

@@ -59,7 +59,7 @@ D3b:
 - Implement stateless cell system
 - Mod token spawning for dynamic grid
 
-10.[] Movement/Scrolling
+10.[X] Movement/Scrolling
 
 - Implement map movement detection - Set up moveend
 - Add movement controls
