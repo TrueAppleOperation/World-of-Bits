@@ -32,6 +32,7 @@ interface GridCell {
   bounds: leaflet.LatLngBounds;
   element: leaflet.Rectangle | null;
   isVisible: boolean;
+  isModified: boolean;
 }
 
 interface GameState {
@@ -205,15 +206,29 @@ function isCellActive(cellKey: CellKey): boolean {
 
 function getOrCreateCell(i: number, j: number): GridCell {
   const cellKey = cellToKey(i, j);
+  
+  // Check if cell is already active
   if (activeCells.has(cellKey)) {
     return activeCells.get(cellKey)!;
   }
+  
   return spawnCell(i, j);
 }
 
 function spawnCell(i: number, j: number): GridCell {
   const bounds = cellToWorldBounds(i, j);
-  const token = spawnTokenInCell(i, j);
+  
+  // Check for saved state first, otherwise spawn new token
+  let token: Token | null = null;
+  const isModified = _cellCaretaker.hasState(cellToKey(i, j));
+  
+  if (isModified) {
+    // Restore from memento
+    token = _cellCaretaker.restoreState(cellToKey(i, j));
+  } else {
+    // Spawn new token using original algorithm
+    token = spawnTokenInCell(i, j);
+  }
 
   const newCell: GridCell = {
     i,
@@ -222,6 +237,7 @@ function spawnCell(i: number, j: number): GridCell {
     bounds,
     element: null,
     isVisible: true,
+    isModified
   };
 
   newCell.element = createCellElement(newCell);
@@ -235,6 +251,11 @@ function spawnCell(i: number, j: number): GridCell {
 function despawnCell(cellKey: CellKey): void {
   const cell = activeCells.get(cellKey);
   if (!cell) return;
+
+  // Save state if cell was modified
+  if (cell.isModified) {
+    _cellCaretaker.saveState(cellKey, cell.token);
+  }
 
   if (cell.element) {
     map.removeLayer(cell.element);
@@ -252,6 +273,12 @@ function cleanupAllCells(): void {
   }
   activeCells.clear();
   gameState.visibleCells.clear();
+}
+
+// Function to mark cell as modified and save state
+function markCellAsModified(cell: GridCell): void {
+  cell.isModified = true;
+  _cellCaretaker.saveState(cellToKey(cell.i, cell.j), cell.token);
 }
 
 // =============================================
@@ -397,6 +424,7 @@ function attemptMerge(cell: GridCell): boolean {
   const newToken = mergeTokens(gameState.player.inventory, cell.token);
   cell.token = newToken;
   gameState.player.inventory = null;
+  markCellAsModified(cell);
 
   updateCellVisualization(cell);
   updateInventoryDisplay();
@@ -432,6 +460,7 @@ function pickupTokenFromCell(cell: GridCell): void {
 
   gameState.player.inventory = cell.token;
   cell.token = null;
+  markCellAsModified(cell);
 
   updateCellVisualization(cell);
   updateInventoryDisplay();
@@ -446,6 +475,7 @@ function dropTokenToCell(cell: GridCell): boolean {
 
   cell.token = gameState.player.inventory;
   gameState.player.inventory = null;
+  markCellAsModified(cell);
 
   updateCellVisualization(cell);
   updateInventoryDisplay();
