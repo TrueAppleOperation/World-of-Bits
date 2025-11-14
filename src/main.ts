@@ -310,6 +310,157 @@ function markCellAsModified(cell: GridCell): void {
 }
 
 // =============================================
+// DEBUG
+// =============================================
+
+function addDebugControls(): void {
+  const debugPanel = document.createElement("div");
+  debugPanel.id = "debugPanel";
+  debugPanel.innerHTML = `
+    <div style="margin: 10px 0; padding: 10px; background: #f0f0f0; border-radius: 5px;">
+      <h4>Debug Info</h4>
+      <button id="showCellStates">Show Saved Cell States</button>
+      <button id="clearAllStates">Clear All Saved States</button>
+      <button id="showMemoryStats">Show Memory Statistics</button>
+      <div id="debugInfo" style="margin-top: 10px; font-family: monospace; font-size: 0.9em;"></div>
+    </div>
+  `;
+
+  document.getElementById("controlPanel")!.appendChild(debugPanel);
+
+  document.getElementById("showCellStates")!.addEventListener(
+    "click",
+    showCellStates,
+  );
+  document.getElementById("clearAllStates")!.addEventListener(
+    "click",
+    clearAllStates,
+  );
+  document.getElementById("showMemoryStats")!.addEventListener(
+    "click",
+    showMemoryStats,
+  );
+}
+
+function showCellStates(): void {
+  const debugInfo = document.getElementById("debugInfo")!;
+  const states = _cellCaretaker.getAllStates();
+
+  let infoHTML = `<p><strong>Saved Cell States: ${states.size}</strong></p>`;
+  infoHTML += `<p>Active Cells: ${activeCells.size}</p>`;
+  infoHTML +=
+    `<p>Flyweight Objects: ${_cellFlyweightFactory.getFlyweightCount()}</p>`;
+  infoHTML += `<ul style="max-height: 200px; overflow-y: auto;">`;
+
+  let modifiedCount = 0;
+  let emptyCount = 0;
+  let tokenCount = 0;
+
+  states.forEach((memento, key) => {
+    const tokenInfo = memento.token
+      ? `Token(value: ${memento.token.value})`
+      : "Empty";
+    infoHTML += `<li>Cell ${key}: ${tokenInfo}</li>`;
+
+    if (memento.token) {
+      tokenCount++;
+    } else {
+      emptyCount++;
+    }
+    modifiedCount++;
+  });
+
+  infoHTML += `</ul>`;
+  infoHTML +=
+    `<p><strong>Summary:</strong> ${modifiedCount} modified cells (${tokenCount} with tokens, ${emptyCount} empty)</p>`;
+
+  debugInfo.innerHTML = infoHTML;
+}
+
+function clearAllStates(): void {
+  // Clear all saved states
+  const states = _cellCaretaker.getAllStates();
+  states.forEach((_, key) => {
+    _cellCaretaker.clearState(key);
+  });
+
+  // Reset all active cells that were modified
+  activeCells.forEach((cell, _key) => {
+    if (cell.isModified) {
+      cell.isModified = false;
+      // Respawn token using original algorithm
+      cell.token = spawnTokenInCell(cell.coordinates.i, cell.coordinates.j);
+      updateCellVisualization(cell);
+    }
+  });
+
+  showCellStates();
+  console.log("Cleared all saved cell states");
+}
+
+function showMemoryStats(): void {
+  const debugInfo = document.getElementById("debugInfo")!;
+
+  // Calculate memory statistics
+  const totalCells = activeCells.size;
+  const modifiedCells =
+    Array.from(activeCells.values()).filter((cell) => cell.isModified).length;
+  const cellsWithTokens =
+    Array.from(activeCells.values()).filter((cell) => cell.token !== null)
+      .length;
+  const flyweightObjects = _cellFlyweightFactory.getFlyweightCount();
+  const savedStates = _cellCaretaker.getAllStates().size;
+
+  // Estimate memory savings from flyweight pattern
+  const estimatedMemoryWithoutFlyweight = totalCells * 16;
+  const estimatedMemoryWithFlyweight = flyweightObjects * 16;
+  const memorySaved = estimatedMemoryWithoutFlyweight -
+    estimatedMemoryWithFlyweight;
+
+  let infoHTML = `
+    <p><strong>Memory Statistics</strong></p>
+    <table style="width: 100%; border-collapse: collapse;">
+      <tr><td style="padding: 4px; border-bottom: 1px solid #ccc;">Active Cells:</td><td style="padding: 4px; border-bottom: 1px solid #ccc;">${totalCells}</td></tr>
+      <tr><td style="padding: 4px; border-bottom: 1px solid #ccc;">Modified Cells:</td><td style="padding: 4px; border-bottom: 1px solid #ccc;">${modifiedCells}</td></tr>
+      <tr><td style="padding: 4px; border-bottom: 1px solid #ccc;">Cells with Tokens:</td><td style="padding: 4px; border-bottom: 1px solid #ccc;">${cellsWithTokens}</td></tr>
+      <tr><td style="padding: 4px; border-bottom: 1px solid #ccc;">Flyweight Objects:</td><td style="padding: 4px; border-bottom: 1px solid #ccc;">${flyweightObjects}</td></tr>
+      <tr><td style="padding: 4px; border-bottom: 1px solid #ccc;">Saved States:</td><td style="padding: 4px; border-bottom: 1px solid #ccc;">${savedStates}</td></tr>
+      <tr><td style="padding: 4px; border-bottom: 1px solid #ccc;">Memory Saved:</td><td style="padding: 4px; border-bottom: 1px solid #ccc;">~${memorySaved} bytes</td></tr>
+      <tr><td style="padding: 4px;">Efficiency:</td><td style="padding: 4px;">${
+    ((flyweightObjects / totalCells) * 100).toFixed(1)
+  }%</td></tr>
+    </table>
+  `;
+
+  infoHTML += `<p><strong>Flyweight Pattern Benefits:</strong></p>`;
+  infoHTML += `<ul>`;
+  infoHTML += `<li>Shared coordinate objects reduce memory usage</li>`;
+  infoHTML += `<li>Only modified cells require persistent storage</li>`;
+  infoHTML += `<li>Unmodified cells remain stateless and lightweight</li>`;
+  infoHTML += `<li>Automatic state preservation for modified cells</li>`;
+  infoHTML += `</ul>`;
+
+  debugInfo.innerHTML = infoHTML;
+}
+
+// Add console debugging functions
+function logMemoryStats(): void {
+  const totalCells = activeCells.size;
+  const modifiedCells =
+    Array.from(activeCells.values()).filter((cell) => cell.isModified).length;
+  const flyweightObjects = _cellFlyweightFactory.getFlyweightCount();
+
+  console.log(`=== Memory Statistics ===`);
+  console.log(`Active Cells: ${totalCells}`);
+  console.log(`Modified Cells: ${modifiedCells}`);
+  console.log(`Flyweight Objects: ${flyweightObjects}`);
+  console.log(
+    `Memory Efficiency: ${((flyweightObjects / totalCells) * 100).toFixed(1)}%`,
+  );
+  console.log(`=========================`);
+}
+
+// =============================================
 // GRID VISIBILITY MANAGEMENT
 // =============================================
 
@@ -865,12 +1016,16 @@ function initializeGame() {
   map = initializeMap();
 
   setupMovementControls();
+  addDebugControls();
   cleanupAllCells();
   updateCellVisibility();
 
   map.on("moveend", handleMapMove);
   updateInventoryDisplay();
   updateUI();
+
+  // Log initial memory stats
+  setTimeout(logMemoryStats, 1000);
 }
 
 initializeGame();
