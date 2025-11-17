@@ -807,6 +807,7 @@ function movePlayer(
   }
 
   gameState.player.location = leaflet.latLng(newLat, newLng);
+  playerMarker.setLatLng(gameState.player.location);
   map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL);
   console.log(`Player moved ${direction} to:`, gameState.player.location);
 }

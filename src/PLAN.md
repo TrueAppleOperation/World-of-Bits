@@ -91,3 +91,41 @@ D3c:
 - Maintain cell coordinate system as flyweight objects
 
 3Dd:
+
+15.[ ] Update Movement Control Interface
+
+- Create MovementController interface with common movement methods
+- Define geolocation and buttons
+- Make sure game logic depends only on the interface
+
+16.[ ] Implement Geolocation Movement
+
+- Implement GeolocationMovementController using browser geolocation API
+- Convert device orientation/position to map coordinates
+- Handle geolocation permissions and errors
+
+17.[ ] Movement Control Switching
+
+- Add runtime control to switch between movement types
+- Add ButtonMovementController using existing button controls
+- Support query string parameter for initial movement type
+
+18.[ ] Implement the Game State Persistence System
+
+- Define serializable game state structure
+- Create GameStateManager to handle save/load operations
+- Integrate with existing memento pattern for cell states
+
+19.[ ] Implement localStorage Integration
+
+- Use browser localStorage API to persist game state
+- Save/load player inventory, location, points, and victory status
+- Handle serialization/deserialization
+
+20.[ ] New Game + Integrate Persistence with Existing Systems
+
+- Implement "New Game" button/control
+- Clear all persisted state/reset to initial conditions
+- Connect localStorage with cell memento system
+- Ensure all modified cells are saved and restored
+- Maintain flyweight pattern efficiency with persistence
