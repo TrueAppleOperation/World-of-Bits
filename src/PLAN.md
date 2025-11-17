@@ -92,25 +92,25 @@ D3c:
 
 3Dd:
 
-15.[ ] Update Movement Control Interface
+15.[X] Update Movement Control Interface
 
 - Create MovementController interface with common movement methods
 - Define geolocation and buttons
 - Make sure game logic depends only on the interface
 
-16.[ ] Implement Geolocation Movement
+16.[X] Implement Geolocation Movement
 
 - Implement GeolocationMovementController using browser geolocation API
 - Convert device orientation/position to map coordinates
 - Handle geolocation permissions and errors
 
-17.[ ] Movement Control Switching
+17.[X] Movement Control Switching
 
 - Add runtime control to switch between movement types
 - Add ButtonMovementController using existing button controls
 - Support query string parameter for initial movement type
 
-18.[ ] Implement the Game State Persistence System
+18.[X] Implement the Game State Persistence System
 
 - Define serializable game state structure
 - Create GameStateManager to handle save/load operations

@@ -20,6 +20,9 @@ interface MovementController {
 
 class ButtonMovementController implements MovementController {
   private active: boolean = false;
+  private movementCallbacks:
+    ((direction: "north" | "south" | "east" | "west" | "center") => void)[] =
+      [];
 
   // deno-lint-ignore require-await
   async initialize(): Promise<void> {
@@ -29,12 +32,14 @@ class ButtonMovementController implements MovementController {
   // deno-lint-ignore require-await
   async enable(): Promise<void> {
     this.active = true;
+    this.updateButtonAccessibility();
     console.log("Button movement enabled");
   }
 
   // deno-lint-ignore require-await
   async disable(): Promise<void> {
     this.active = false;
+    this.updateButtonAccessibility();
     console.log("Button movement disabled");
   }
 
@@ -48,7 +53,50 @@ class ButtonMovementController implements MovementController {
 
   cleanup(): void {
     this.active = false;
+    this.movementCallbacks = [];
     console.log("Button movement controller cleaned up");
+  }
+
+  onMove(
+    callback: (
+      direction: "north" | "south" | "east" | "west" | "center",
+    ) => void,
+  ): void {
+    this.movementCallbacks.push(callback);
+  }
+
+  private updateButtonAccessibility(): void {
+    const buttons = [
+      "moveNorth",
+      "moveSouth",
+      "moveEast",
+      "moveWest",
+      "moveCenter",
+    ];
+
+    buttons.forEach((buttonId) => {
+      const button = document.getElementById(buttonId);
+      if (button) {
+        if (this.active) {
+          button.style.opacity = "1";
+          button.style.cursor = "pointer";
+          button.removeAttribute("disabled");
+        } else {
+          button.style.opacity = "0.6";
+          button.style.cursor = "not-allowed";
+          button.setAttribute("disabled", "true");
+        }
+      }
+    });
+  }
+
+  // Public method to trigger movement
+  public triggerMove(
+    direction: "north" | "south" | "east" | "west" | "center",
+  ): void {
+    if (this.active) {
+      this.movementCallbacks.forEach((callback) => callback(direction));
+    }
   }
 }
 
@@ -180,14 +228,12 @@ class GeolocationMovementController implements MovementController {
     lat2: number,
     lng2: number,
   ): number {
-
     const dLat = lat2 - lat1;
     const dLng = lng2 - lng1;
     return Math.sqrt(dLat * dLat + dLng * dLng);
   }
 
   private updatePlayerPosition(newLat: number, newLng: number): void {
-
     const currentLat = gameState.player.location.lat;
     const currentLng = gameState.player.location.lng;
     const smoothLat = currentLat + (newLat - currentLat) * 0.7;
@@ -265,6 +311,7 @@ class GeolocationMovementController implements MovementController {
 class MovementManager {
   private controllers: Map<string, MovementController>;
   private currentController: MovementController | null = null;
+  private movementChangeCallbacks: ((type: string) => void)[] = [];
 
   constructor() {
     this.controllers = new Map();
@@ -282,13 +329,26 @@ class MovementManager {
       }
     }
 
-    // Check URL parameters for movement type preference
+    // Enhanced URL parameter handling with validation
     const urlParams = new URLSearchParams(globalThis.location.search);
     const movementParam = urlParams.get("movement");
 
     let initialMovementType = "buttons";
+
+    // Validate and set initial movement type
     if (movementParam === "geolocation") {
-      initialMovementType = "geolocation";
+      // Check if geolocation is actually available before defaulting to it
+      if (navigator.geolocation) {
+        initialMovementType = "geolocation";
+      } else {
+        console.warn(
+          "Geolocation requested via URL but not available in browser",
+        );
+      }
+    } else if (movementParam && movementParam !== "buttons") {
+      console.warn(
+        `Unknown movement type in URL: ${movementParam}, defaulting to buttons`,
+      );
     }
 
     await this.switchToMovementType(initialMovementType);
@@ -302,6 +362,14 @@ class MovementManager {
       return false;
     }
 
+    if (
+      this.currentController === newController &&
+      this.currentController.isActive()
+    ) {
+      console.log(`Already using ${type} movement`);
+      return true;
+    }
+
     // Disable current controller
     if (this.currentController) {
       await this.currentController.disable();
@@ -313,12 +381,29 @@ class MovementManager {
       await this.currentController.enable();
 
       console.log(`Switched to ${type} movement`);
+
+      // Update URL parameter without page reload
+      this.updateURLParameter(type);
+
+      // Update UI and notify callbacks
       this.updateMovementUI();
+      this.notifyMovementChange(type);
+
       return true;
     } catch (error) {
       console.error(`Failed to switch to ${type} movement:`, error);
 
+      // Fallback logic
       if (type === "geolocation") {
+        console.log(
+          "Falling back to button controls due to geolocation failure",
+        );
+        const statusPanel = document.getElementById("statusPanel");
+        if (statusPanel) {
+          statusPanel.textContent =
+            "Geolocation unavailable. Using button controls.";
+          setTimeout(() => updateUI(), 3000);
+        }
         return await this.switchToMovementType("buttons");
       }
       return false;
@@ -327,6 +412,10 @@ class MovementManager {
 
   getCurrentController(): MovementController | null {
     return this.currentController;
+  }
+
+  getCurrentMovementType(): string {
+    return this.currentController?.getMovementType() || "buttons";
   }
 
   getAvailableMovementTypes(): string[] {
@@ -343,30 +432,71 @@ class MovementManager {
     }
   }
 
+  // Add callback for movement changes
+  onMovementChange(callback: (type: string) => void): void {
+    this.movementChangeCallbacks.push(callback);
+  }
+
+  private notifyMovementChange(type: string): void {
+    this.movementChangeCallbacks.forEach((callback) => callback(type));
+  }
+
+  private updateURLParameter(movementType: string): void {
+    const url = new URL(globalThis.location.href);
+
+    if (movementType === "buttons") {
+      // Remove parameter if using default
+      url.searchParams.delete("movement");
+    } else {
+      // Set parameter for non-default types
+      url.searchParams.set("movement", movementType);
+    }
+
+    // Update URL without reloading page
+    globalThis.history.replaceState({}, "", url.toString());
+  }
+
   private updateMovementUI(): void {
     const movementType = this.currentController?.getMovementType() || "unknown";
 
     const toggleButton = document.getElementById("movementToggle");
     if (toggleButton) {
-      toggleButton.textContent = `Movement: ${movementType} (Click to switch)`;
+      const isGeolocation = movementType === "geolocation";
 
-      // Update button style based on movement type
-      if (movementType === "geolocation") {
+      toggleButton.textContent = `Movement: ${movementType} (Click to switch)`;
+      toggleButton.title = `Current: ${movementType}. Click to switch to ${
+        isGeolocation ? "buttons" : "geolocation"
+      }`;
+
+      if (isGeolocation) {
         toggleButton.style.background = "#2196F3";
+        toggleButton.style.boxShadow = "0 2px 4px rgba(33, 150, 243, 0.3)";
       } else {
         toggleButton.style.background = "#4CAF50";
+        toggleButton.style.boxShadow = "0 2px 4px rgba(76, 175, 80, 0.3)";
       }
     }
 
-    // Update recalibrate button visibility
-    const recalibrateButton = document.getElementById("recalibrateButton");
+    // Update recalibrate button visibility and state
+    const recalibrateButton = document.getElementById(
+      "recalibrateButton",
+    ) as HTMLButtonElement;
     if (recalibrateButton) {
-      if (movementType === "geolocation") {
+      const isGeolocationActive = movementType === "geolocation";
+
+      if (isGeolocationActive) {
         recalibrateButton.style.display = "inline-block";
+        recalibrateButton.disabled = false;
+        recalibrateButton.title =
+          "Recalibrate your current location as the center point";
       } else {
         recalibrateButton.style.display = "none";
+        recalibrateButton.disabled = true;
       }
     }
+
+    // Update movement instructions based on current type
+    this.updateMovementInstructions(movementType);
 
     const statusPanel = document.getElementById("statusPanel");
     if (statusPanel) {
@@ -375,6 +505,32 @@ class MovementManager {
     }
 
     console.log(`Movement UI updated: ${movementType}`);
+  }
+
+  private updateMovementInstructions(movementType: string): void {
+    const instructionsElement = document.getElementById("movementInstructions");
+    if (!instructionsElement) return;
+
+    if (movementType === "geolocation") {
+      instructionsElement.innerHTML = `
+        <div style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px; border-left: 4px solid #2196F3;">
+          <p style="margin: 0; font-size: 0.9em; color: #1565C0;">
+            <strong>🎯 Geolocation Active</strong><br>
+            Move around in the real world to navigate the map. 
+            The game will follow your physical location.
+          </p>
+        </div>
+      `;
+    } else {
+      instructionsElement.innerHTML = `
+        <div style="margin: 10px 0; padding: 10px; background: #e8f5e8; border-radius: 4px; border-left: 4px solid #4CAF50;">
+          <p style="margin: 0; font-size: 0.9em; color: #2e7d32;">
+            <strong>🎮 Button Controls Active</strong><br>
+            Use the directional buttons above to navigate the map.
+          </p>
+        </div>
+      `;
+    }
   }
 
   cleanup(): void {
@@ -387,6 +543,7 @@ class MovementManager {
     }
 
     this.currentController = null;
+    this.movementChangeCallbacks = [];
   }
 }
 
@@ -1120,37 +1277,53 @@ function updateInteractionRangeDisplay(): void {
 }
 
 // =============================================
-// PLAYER MOVEMENT
+// ENHANCED MOVEMENT CONTROLS UI
 // =============================================
 
 function addMovementControls(): void {
   const movementPanel = document.createElement("div");
   movementPanel.id = "movementPanel";
   movementPanel.innerHTML = `
-    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin: 10px 0;">
-      <div></div>
-      <button id="moveNorth">↑ North</button>
-      <div></div>
-      <button id="moveWest">← West</button>
-      <button id="moveCenter">Center</button>
-      <button id="moveEast">→ East</button>
-      <div></div>
-      <button id="moveSouth">↓ South</button>
-      <div></div>
-    </div>
-    <div style="margin: 10px 0;">
-      <button id="movementToggle" style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">
-        Movement: buttons (Click to switch)
-      </button>
-      <button id="recalibrateButton" style="padding: 8px 16px; background: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer; display: none;">
-        Recalibrate Location
-      </button>
-    </div>
-    <div style="margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 4px;">
-      <p style="margin: 0; font-size: 0.9em; color: #666;">
-        <strong>Geolocation Tips:</strong> Move around in the real world to navigate the map. 
-        Use "Recalibrate" if your position gets out of sync.
-      </p>
+    <div style="margin-bottom: 15px;">
+      <h3 style="margin: 0 0 10px 0; color: #333;">Movement Controls</h3>
+      
+      <!-- Movement Type Toggle -->
+      <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+        <button id="movementToggle" style="padding: 10px 16px; background: #4CAF50; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.3s ease;">
+          Movement: buttons (Click to switch)
+        </button>
+        <button id="recalibrateButton" style="padding: 10px 16px; background: #FF9800; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.3s ease; display: none;">
+          Recalibrate Location
+        </button>
+      </div>
+      
+      <!-- Dynamic Instructions -->
+      <div id="movementInstructions"></div>
+      
+      <!-- Directional Buttons -->
+      <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border: 2px solid #e9ecef;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 0 auto; max-width: 200px;">
+          <div></div>
+          <button id="moveNorth" style="padding: 12px; background: #4285f4; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; transition: all 0.2s ease;">
+            ↑ North
+          </button>
+          <div></div>
+          <button id="moveWest" style="padding: 12px; background: #4285f4; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; transition: all 0.2s ease;">
+            ← West
+          </button>
+          <button id="moveCenter" style="padding: 12px; background: #f4b400; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; transition: all 0.2s ease;">
+            Center
+          </button>
+          <button id="moveEast" style="padding: 12px; background: #4285f4; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; transition: all 0.2s ease;">
+            → East
+          </button>
+          <div></div>
+          <button id="moveSouth" style="padding: 12px; background: #4285f4; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; transition: all 0.2s ease;">
+            ↓ South
+          </button>
+          <div></div>
+        </div>
+      </div>
     </div>
   `;
 
@@ -1159,27 +1332,146 @@ function addMovementControls(): void {
 
 function setupMovementControls(): void {
   const get = (id: string) => document.getElementById(id)!;
+  const setupMoveButton = (
+    id: string,
+    direction: "north" | "south" | "east" | "west" | "center",
+  ) => {
+    const button = get(id);
+    button.addEventListener("click", () => {
+      if (movementManager.getCurrentMovementType() === "buttons") {
+        // Add click animation
+        button.style.transform = "scale(0.95)";
+        setTimeout(() => {
+          button.style.transform = "scale(1)";
+        }, 150);
 
-  get("moveNorth").addEventListener("click", () => movePlayer("north"));
-  get("moveSouth").addEventListener("click", () => movePlayer("south"));
-  get("moveEast").addEventListener("click", () => movePlayer("east"));
-  get("moveWest").addEventListener("click", () => movePlayer("west"));
-  get("moveCenter").addEventListener("click", () => movePlayer("center"));
+        movePlayer(direction);
+      }
+    });
 
-  get("movementToggle").addEventListener("click", toggleMovementType);
-  get("recalibrateButton").addEventListener("click", recalibrateGeolocation);
+    // Hover effects
+    button.addEventListener("mouseenter", () => {
+      if (movementManager.getCurrentMovementType() === "buttons") {
+        button.style.filter = "brightness(1.1)";
+      }
+    });
+
+    button.addEventListener("mouseleave", () => {
+      button.style.filter = "brightness(1)";
+      button.style.transform = "scale(1)";
+    });
+  };
+
+  setupMoveButton("moveNorth", "north");
+  setupMoveButton("moveSouth", "south");
+  setupMoveButton("moveEast", "east");
+  setupMoveButton("moveWest", "west");
+
+  // Center button special handling
+  const centerButton = get("moveCenter");
+  centerButton.addEventListener("click", () => {
+    if (movementManager.getCurrentMovementType() === "buttons") {
+      centerButton.style.transform = "scale(0.95)";
+      setTimeout(() => {
+        centerButton.style.transform = "scale(1)";
+      }, 150);
+      movePlayer("center");
+    }
+  });
+
+  // Movement toggle with enhanced feedback
+  const toggleButton = get("movementToggle");
+  toggleButton.addEventListener("click", toggleMovementType);
+
+  toggleButton.addEventListener("mouseenter", () => {
+    toggleButton.style.filter = "brightness(1.1)";
+  });
+
+  toggleButton.addEventListener("mouseleave", () => {
+    toggleButton.style.filter = "brightness(1)";
+  });
+
+  // Recalibrate button
+  const recalibrateButton = get("recalibrateButton");
+  recalibrateButton.addEventListener("click", recalibrateGeolocation);
+
+  recalibrateButton.addEventListener("mouseenter", () => {
+    recalibrateButton.style.filter = "brightness(1.1)";
+  });
+
+  recalibrateButton.addEventListener("mouseleave", () => {
+    recalibrateButton.style.filter = "brightness(1)";
+  });
+
+  // Listen for movement changes to update button states
+  movementManager.onMovementChange((type) => {
+    updateButtonStates(type);
+  });
+}
+
+function updateButtonStates(movementType: string): void {
+  const buttons = [
+    "moveNorth",
+    "moveSouth",
+    "moveEast",
+    "moveWest",
+    "moveCenter",
+  ];
+
+  const isButtonControl = movementType === "buttons";
+
+  buttons.forEach((buttonId) => {
+    const button = document.getElementById(buttonId) as HTMLButtonElement;
+    if (button) {
+      if (isButtonControl) {
+        button.style.opacity = "1";
+        button.style.cursor = "pointer";
+        button.style.background = buttonId === "moveCenter"
+          ? "#f4b400"
+          : "#4285f4";
+        button.disabled = false;
+      } else {
+        button.style.opacity = "0.6";
+        button.style.cursor = "not-allowed";
+        button.style.background = "#cccccc";
+        button.disabled = true;
+      }
+    }
+  });
 }
 
 function toggleMovementType(): void {
-  const currentController = movementManager.getCurrentController();
-  const currentType = currentController?.getMovementType() || "buttons";
-
+  const currentType = movementManager.getCurrentMovementType();
   const newType = currentType === "buttons" ? "geolocation" : "buttons";
-  movementManager.switchToMovementType(newType);
+  const toggleButton = document.getElementById("movementToggle")!;
+  toggleButton.style.transform = "scale(0.95)";
+
+  movementManager.switchToMovementType(newType).then((success) => {
+    setTimeout(() => {
+      toggleButton.style.transform = "scale(1)";
+    }, 150);
+
+    if (success) {
+      console.log(`Movement switched to: ${newType}`);
+    }
+  });
 }
 
 function recalibrateGeolocation(): void {
   movementManager.recalibrateGeolocation();
+
+  // Visual feedback
+  const recalibrateButton = document.getElementById(
+    "recalibrateButton",
+  )! as HTMLButtonElement;
+  const originalText = recalibrateButton.textContent;
+  recalibrateButton.textContent = "Recalibrating...";
+  recalibrateButton.disabled = true;
+
+  setTimeout(() => {
+    recalibrateButton.textContent = originalText;
+    recalibrateButton.disabled = false;
+  }, 1000);
 }
 
 function movePlayer(
@@ -1209,9 +1501,17 @@ function movePlayer(
 
   gameState.player.location = leaflet.latLng(newLat, newLng);
   playerMarker.setLatLng(gameState.player.location);
-  map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL);
+
+  // Smooth pan to new location
+  map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL, {
+    animate: true,
+    duration: 0.3,
+    easeLinearity: 0.25,
+  });
+
   updateCellVisibility();
   updateInteractionRangeDisplay();
+
   console.log(`Player moved ${direction} to:`, gameState.player.location);
 }
 
@@ -1280,8 +1580,7 @@ function updateUI() {
     showVictoryMessage();
   } else {
     const highestToken = getHighestTokenValue();
-    const movementType =
-      movementManager.getCurrentController()?.getMovementType() || "buttons";
+    const movementType = movementManager.getCurrentMovementType();
     statusPanel.innerHTML = `Points: ${gameState.player.points} | ` +
       `Goal: Create a ${CONFIG.VICTORY_THRESHOLD} token | ` +
       `Range: ${CONFIG.INTERACTION_RANGE} cells | Highest: ${highestToken} | Movement: ${movementType}`;
