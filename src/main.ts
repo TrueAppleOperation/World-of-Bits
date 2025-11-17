@@ -6,6 +6,393 @@ import luck from "./_luck.ts";
 import "./style.css";
 
 // =============================================
+// MOVEMENT CONTROL INTERFACE (FACADE PATTERN)
+// =============================================
+
+interface MovementController {
+  initialize(): Promise<void>;
+  enable(): Promise<void>;
+  disable(): Promise<void>;
+  getMovementType(): string;
+  isActive(): boolean;
+  cleanup(): void;
+}
+
+class ButtonMovementController implements MovementController {
+  private active: boolean = false;
+
+  // deno-lint-ignore require-await
+  async initialize(): Promise<void> {
+    console.log("Button movement controller initialized");
+  }
+
+  // deno-lint-ignore require-await
+  async enable(): Promise<void> {
+    this.active = true;
+    console.log("Button movement enabled");
+  }
+
+  // deno-lint-ignore require-await
+  async disable(): Promise<void> {
+    this.active = false;
+    console.log("Button movement disabled");
+  }
+
+  getMovementType(): string {
+    return "buttons";
+  }
+
+  isActive(): boolean {
+    return this.active;
+  }
+
+  cleanup(): void {
+    this.active = false;
+    console.log("Button movement controller cleaned up");
+  }
+}
+
+class GeolocationMovementController implements MovementController {
+  private active: boolean = false;
+  private watchId: number | null = null;
+  private lastPosition: GeolocationPosition | null = null;
+  private calibrationOffset: { lat: number; lng: number } | null = null;
+  private isCalibrated: boolean = false;
+  private movementThreshold: number = 0.00002; // Minimum movement to trigger update
+
+  async initialize(): Promise<void> {
+    if (!navigator.geolocation) {
+      throw new Error("Geolocation is not supported by this browser");
+    }
+
+    // Request permission and get initial position for calibration
+    try {
+      const position = await new Promise<GeolocationPosition>(
+        (resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0,
+          });
+        },
+      );
+
+      this.calibrate(position);
+      console.log("Geolocation movement controller initialized and calibrated");
+    } catch (error) {
+      console.warn("Could not get initial position for calibration:", error);
+    }
+  }
+
+  // deno-lint-ignore require-await
+  async enable(): Promise<void> {
+    if (this.active) return;
+
+    this.active = true;
+
+    if (navigator.geolocation) {
+      this.watchId = navigator.geolocation.watchPosition(
+        (position) => this.handlePositionUpdate(position),
+        (error) => this.handleGeolocationError(error),
+        {
+          enableHighAccuracy: true,
+          maximumAge: 1000,
+          timeout: 5000,
+        },
+      );
+    }
+
+    console.log("Geolocation movement enabled");
+  }
+
+  // deno-lint-ignore require-await
+  async disable(): Promise<void> {
+    this.active = false;
+
+    if (this.watchId !== null) {
+      navigator.geolocation.clearWatch(this.watchId);
+      this.watchId = null;
+    }
+
+    console.log("Geolocation movement disabled");
+  }
+
+  getMovementType(): string {
+    return "geolocation";
+  }
+
+  isActive(): boolean {
+    return this.active;
+  }
+
+  cleanup(): void {
+    this.disable();
+    this.lastPosition = null;
+    this.calibrationOffset = null;
+    this.isCalibrated = false;
+    console.log("Geolocation movement controller cleaned up");
+  }
+
+  private calibrate(position: GeolocationPosition): void {
+    const currentLat = gameState.player.location.lat;
+    const currentLng = gameState.player.location.lng;
+
+    this.calibrationOffset = {
+      lat: currentLat - position.coords.latitude,
+      lng: currentLng - position.coords.longitude,
+    };
+
+    this.isCalibrated = true;
+    console.log("Geolocation calibrated with offset:", this.calibrationOffset);
+  }
+
+  private handlePositionUpdate(position: GeolocationPosition): void {
+    this.lastPosition = position;
+
+    if (!this.active) return;
+
+    // Calibrate on first position update if not already calibrated
+    if (!this.isCalibrated) {
+      this.calibrate(position);
+      return;
+    }
+
+    // Apply calibration offset to convert real-world coordinates to game coordinates
+    const gameLat = position.coords.latitude + this.calibrationOffset!.lat;
+    const gameLng = position.coords.longitude + this.calibrationOffset!.lng;
+
+    // Calculate distance from current position
+    const distance = this.calculateDistance(
+      gameState.player.location.lat,
+      gameState.player.location.lng,
+      gameLat,
+      gameLng,
+    );
+
+    if (distance >= this.movementThreshold) {
+      this.updatePlayerPosition(gameLat, gameLng);
+    }
+  }
+
+  private calculateDistance(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+
+    const dLat = lat2 - lat1;
+    const dLng = lng2 - lng1;
+    return Math.sqrt(dLat * dLat + dLng * dLng);
+  }
+
+  private updatePlayerPosition(newLat: number, newLng: number): void {
+
+    const currentLat = gameState.player.location.lat;
+    const currentLng = gameState.player.location.lng;
+    const smoothLat = currentLat + (newLat - currentLat) * 0.7;
+    const smoothLng = currentLng + (newLng - currentLng) * 0.7;
+
+    // Update game state
+    gameState.player.location = leaflet.latLng(smoothLat, smoothLng);
+
+    // Update marker position
+    playerMarker.setLatLng(gameState.player.location);
+
+    // Update map view to follow player with smooth transition
+    map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL, {
+      animate: true,
+      duration: 0.5,
+      easeLinearity: 0.25,
+    });
+
+    // Update cell visibility and interaction range
+    updateCellVisibility();
+    updateInteractionRangeDisplay();
+
+    console.log(
+      `Player moved via geolocation to: ${smoothLat.toFixed(6)}, ${
+        smoothLng.toFixed(6)
+      }`,
+    );
+  }
+
+  private handleGeolocationError(error: GeolocationPositionError): void {
+    console.error("Geolocation error:", error);
+
+    const statusPanel = document.getElementById("statusPanel");
+    if (statusPanel) {
+      let errorMessage = "Geolocation error: ";
+      switch (error.code) {
+        case error.PERMISSION_DENIED:
+          errorMessage += "Permission denied. Please enable location services.";
+          break;
+        case error.POSITION_UNAVAILABLE:
+          errorMessage +=
+            "Position unavailable. Please check your device's location settings.";
+          break;
+        case error.TIMEOUT:
+          errorMessage += "Location request timed out.";
+          break;
+        default:
+          errorMessage += error.message;
+      }
+
+      statusPanel.textContent =
+        `${errorMessage} Falling back to button controls.`;
+      setTimeout(() => updateUI(), 5000);
+    }
+
+    // Fall back to button controls
+    movementManager.switchToMovementType("buttons");
+  }
+
+  // Public method to recalibrate if needed
+  public recalibrate(): void {
+    if (this.lastPosition) {
+      this.calibrate(this.lastPosition);
+
+      const statusPanel = document.getElementById("statusPanel");
+      if (statusPanel) {
+        statusPanel.textContent =
+          "Geolocation recalibrated to current position.";
+        setTimeout(() => updateUI(), 3000);
+      }
+    }
+  }
+}
+
+class MovementManager {
+  private controllers: Map<string, MovementController>;
+  private currentController: MovementController | null = null;
+
+  constructor() {
+    this.controllers = new Map();
+
+    this.controllers.set("buttons", new ButtonMovementController());
+    this.controllers.set("geolocation", new GeolocationMovementController());
+  }
+
+  async initialize(): Promise<void> {
+    for (const controller of this.controllers.values()) {
+      try {
+        await controller.initialize();
+      } catch (error) {
+        console.warn(`Failed to initialize movement controller:`, error);
+      }
+    }
+
+    // Check URL parameters for movement type preference
+    const urlParams = new URLSearchParams(globalThis.location.search);
+    const movementParam = urlParams.get("movement");
+
+    let initialMovementType = "buttons";
+    if (movementParam === "geolocation") {
+      initialMovementType = "geolocation";
+    }
+
+    await this.switchToMovementType(initialMovementType);
+  }
+
+  async switchToMovementType(type: string): Promise<boolean> {
+    const newController = this.controllers.get(type);
+
+    if (!newController) {
+      console.error(`Movement type '${type}' not found`);
+      return false;
+    }
+
+    // Disable current controller
+    if (this.currentController) {
+      await this.currentController.disable();
+    }
+
+    // Enable new controller
+    try {
+      this.currentController = newController;
+      await this.currentController.enable();
+
+      console.log(`Switched to ${type} movement`);
+      this.updateMovementUI();
+      return true;
+    } catch (error) {
+      console.error(`Failed to switch to ${type} movement:`, error);
+
+      if (type === "geolocation") {
+        return await this.switchToMovementType("buttons");
+      }
+      return false;
+    }
+  }
+
+  getCurrentController(): MovementController | null {
+    return this.currentController;
+  }
+
+  getAvailableMovementTypes(): string[] {
+    return Array.from(this.controllers.keys());
+  }
+
+  // Method to recalibrate geolocation
+  recalibrateGeolocation(): void {
+    const geolocationController = this.controllers.get(
+      "geolocation",
+    ) as GeolocationMovementController;
+    if (geolocationController && geolocationController.isActive()) {
+      geolocationController.recalibrate();
+    }
+  }
+
+  private updateMovementUI(): void {
+    const movementType = this.currentController?.getMovementType() || "unknown";
+
+    const toggleButton = document.getElementById("movementToggle");
+    if (toggleButton) {
+      toggleButton.textContent = `Movement: ${movementType} (Click to switch)`;
+
+      // Update button style based on movement type
+      if (movementType === "geolocation") {
+        toggleButton.style.background = "#2196F3";
+      } else {
+        toggleButton.style.background = "#4CAF50";
+      }
+    }
+
+    // Update recalibrate button visibility
+    const recalibrateButton = document.getElementById("recalibrateButton");
+    if (recalibrateButton) {
+      if (movementType === "geolocation") {
+        recalibrateButton.style.display = "inline-block";
+      } else {
+        recalibrateButton.style.display = "none";
+      }
+    }
+
+    const statusPanel = document.getElementById("statusPanel");
+    if (statusPanel) {
+      const baseText = statusPanel.textContent?.split("|")[0] || "";
+      statusPanel.textContent = `${baseText} | Movement: ${movementType}`;
+    }
+
+    console.log(`Movement UI updated: ${movementType}`);
+  }
+
+  cleanup(): void {
+    if (this.currentController) {
+      this.currentController.disable();
+    }
+
+    for (const controller of this.controllers.values()) {
+      controller.cleanup();
+    }
+
+    this.currentController = null;
+  }
+}
+
+const movementManager = new MovementManager();
+
+// =============================================
 // INTERFACES & TYPES
 // =============================================
 
@@ -25,9 +412,8 @@ interface CellCoordinates {
 
 type CellKey = string;
 
-// Updated GridCell interface to use flyweight coordinates
 interface GridCell {
-  coordinates: CellCoordinates; // Flyweight object
+  coordinates: CellCoordinates;
   token: Token | null;
   bounds: leaflet.LatLngBounds;
   element: leaflet.Rectangle | null;
@@ -102,7 +488,6 @@ class CellCaretaker {
   }
 }
 
-// Initialize the caretaker globally
 const _cellCaretaker = new CellCaretaker();
 
 // =============================================
@@ -127,7 +512,6 @@ class CellFlyweightFactory {
   }
 }
 
-// Initialize the flyweight factory globally
 const _cellFlyweightFactory = new CellFlyweightFactory();
 
 // =============================================
@@ -232,7 +616,6 @@ function isCellActive(cellKey: CellKey): boolean {
 function getOrCreateCell(i: number, j: number): GridCell {
   const cellKey = cellToKey(i, j);
 
-  // Check if cell is already active
   if (activeCells.has(cellKey)) {
     return activeCells.get(cellKey)!;
   }
@@ -244,15 +627,12 @@ function spawnCell(i: number, j: number): GridCell {
   const bounds = cellToWorldBounds(i, j);
   const coordinates = _cellFlyweightFactory.getFlyweight(i, j);
 
-  // Check for saved state first, otherwise spawn new token
   let token: Token | null = null;
   const isModified = _cellCaretaker.hasState(cellToKey(i, j));
 
   if (isModified) {
-    // Restore from memento
     token = _cellCaretaker.restoreState(cellToKey(i, j));
   } else {
-    // Spawn new token using original algorithm
     token = spawnTokenInCell(i, j);
   }
 
@@ -277,7 +657,6 @@ function despawnCell(cellKey: CellKey): void {
   const cell = activeCells.get(cellKey);
   if (!cell) return;
 
-  // Save state if cell was modified
   if (cell.isModified) {
     _cellCaretaker.saveState(cellKey, cell.token);
   }
@@ -300,7 +679,6 @@ function cleanupAllCells(): void {
   gameState.visibleCells.clear();
 }
 
-// Function to mark cell as modified and save state
 function markCellAsModified(cell: GridCell): void {
   cell.isModified = true;
   _cellCaretaker.saveState(
@@ -378,17 +756,14 @@ function showCellStates(): void {
 }
 
 function clearAllStates(): void {
-  // Clear all saved states
   const states = _cellCaretaker.getAllStates();
   states.forEach((_, key) => {
     _cellCaretaker.clearState(key);
   });
 
-  // Reset all active cells that were modified
   activeCells.forEach((cell, _key) => {
     if (cell.isModified) {
       cell.isModified = false;
-      // Respawn token using original algorithm
       cell.token = spawnTokenInCell(cell.coordinates.i, cell.coordinates.j);
       updateCellVisualization(cell);
     }
@@ -401,7 +776,6 @@ function clearAllStates(): void {
 function showMemoryStats(): void {
   const debugInfo = document.getElementById("debugInfo")!;
 
-  // Calculate memory statistics
   const totalCells = activeCells.size;
   const modifiedCells =
     Array.from(activeCells.values()).filter((cell) => cell.isModified).length;
@@ -411,7 +785,6 @@ function showMemoryStats(): void {
   const flyweightObjects = _cellFlyweightFactory.getFlyweightCount();
   const savedStates = _cellCaretaker.getAllStates().size;
 
-  // Estimate memory savings from flyweight pattern
   const estimatedMemoryWithoutFlyweight = totalCells * 16;
   const estimatedMemoryWithFlyweight = flyweightObjects * 16;
   const memorySaved = estimatedMemoryWithoutFlyweight -
@@ -443,7 +816,6 @@ function showMemoryStats(): void {
   debugInfo.innerHTML = infoHTML;
 }
 
-// Add console debugging functions
 function logMemoryStats(): void {
   const totalCells = activeCells.size;
   const modifiedCells =
@@ -766,6 +1138,20 @@ function addMovementControls(): void {
       <button id="moveSouth">↓ South</button>
       <div></div>
     </div>
+    <div style="margin: 10px 0;">
+      <button id="movementToggle" style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 10px;">
+        Movement: buttons (Click to switch)
+      </button>
+      <button id="recalibrateButton" style="padding: 8px 16px; background: #FF9800; color: white; border: none; border-radius: 4px; cursor: pointer; display: none;">
+        Recalibrate Location
+      </button>
+    </div>
+    <div style="margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+      <p style="margin: 0; font-size: 0.9em; color: #666;">
+        <strong>Geolocation Tips:</strong> Move around in the real world to navigate the map. 
+        Use "Recalibrate" if your position gets out of sync.
+      </p>
+    </div>
   `;
 
   document.getElementById("controlPanel")!.appendChild(movementPanel);
@@ -779,6 +1165,21 @@ function setupMovementControls(): void {
   get("moveEast").addEventListener("click", () => movePlayer("east"));
   get("moveWest").addEventListener("click", () => movePlayer("west"));
   get("moveCenter").addEventListener("click", () => movePlayer("center"));
+
+  get("movementToggle").addEventListener("click", toggleMovementType);
+  get("recalibrateButton").addEventListener("click", recalibrateGeolocation);
+}
+
+function toggleMovementType(): void {
+  const currentController = movementManager.getCurrentController();
+  const currentType = currentController?.getMovementType() || "buttons";
+
+  const newType = currentType === "buttons" ? "geolocation" : "buttons";
+  movementManager.switchToMovementType(newType);
+}
+
+function recalibrateGeolocation(): void {
+  movementManager.recalibrateGeolocation();
 }
 
 function movePlayer(
@@ -809,6 +1210,8 @@ function movePlayer(
   gameState.player.location = leaflet.latLng(newLat, newLng);
   playerMarker.setLatLng(gameState.player.location);
   map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL);
+  updateCellVisibility();
+  updateInteractionRangeDisplay();
   console.log(`Player moved ${direction} to:`, gameState.player.location);
 }
 
@@ -877,9 +1280,11 @@ function updateUI() {
     showVictoryMessage();
   } else {
     const highestToken = getHighestTokenValue();
+    const movementType =
+      movementManager.getCurrentController()?.getMovementType() || "buttons";
     statusPanel.innerHTML = `Points: ${gameState.player.points} | ` +
       `Goal: Create a ${CONFIG.VICTORY_THRESHOLD} token | ` +
-      `Range: ${CONFIG.INTERACTION_RANGE} cells | Highest: ${highestToken}`;
+      `Range: ${CONFIG.INTERACTION_RANGE} cells | Highest: ${highestToken} | Movement: ${movementType}`;
   }
 }
 
@@ -980,6 +1385,8 @@ function initializeDOM() {
           <li>Merging creates a new token with doubled value</li>
           <li>Earn points when you merge tokens!</li>
           <li>Use the movement buttons to navigate the map</li>
+          <li>Toggle between button and geolocation movement</li>
+          <li>With geolocation: Move around in real life to explore the map!</li>
         </ul>
       </div>
     </div>
@@ -1012,9 +1419,11 @@ function initializeMap(): leaflet.Map {
   return mapInstance;
 }
 
-function initializeGame() {
+async function initializeGame() {
   initializeDOM();
   map = initializeMap();
+
+  await movementManager.initialize();
 
   setupMovementControls();
   addDebugControls();
@@ -1025,7 +1434,6 @@ function initializeGame() {
   updateInventoryDisplay();
   updateUI();
 
-  // Log initial memory stats
   setTimeout(logMemoryStats, 1000);
 }
 
