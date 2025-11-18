@@ -111,8 +111,8 @@ class ButtonMovementController implements MovementController {
   private active: boolean = false;
   private movementCallbacks:
     ((direction: "north" | "south" | "east" | "west" | "center") => void)[] =
-    [];
-  
+      [];
+
   initialize(): Promise<void> {
     console.log("Button movement controller initialized");
     return Promise.resolve();
@@ -1515,7 +1515,7 @@ function dropTokenToCell(cell: GridCell): boolean {
 }
 
 // =============================================
-// VISUALIZATION
+// VISUALIZATION 
 // =============================================
 
 function getCellStyle(cell: GridCell): CellStyle {
