@@ -116,13 +116,13 @@ D3c:
 - Create GameStateManager to handle save/load operations
 - Integrate with existing memento pattern for cell states
 
-19.[ ] Implement localStorage Integration
+19.[X] Implement localStorage Integration
 
 - Use browser localStorage API to persist game state
 - Save/load player inventory, location, points, and victory status
 - Handle serialization/deserialization
 
-20.[ ] New Game + Integrate Persistence with Existing Systems
+20.[X] New Game + Integrate Persistence with Existing Systems
 
 - Implement "New Game" button/control
 - Clear all persisted state/reset to initial conditions

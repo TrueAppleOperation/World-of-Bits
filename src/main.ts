@@ -6,6 +6,95 @@ import luck from "./_luck.ts";
 import "./style.css";
 
 // =============================================
+// LOCALSTORAGE PERSISTENCE
+// =============================================
+
+class GamePersistenceManager {
+  private static readonly STORAGE_KEY = "world-of-bits-game-state";
+
+  saveGameState(): void {
+    const gameStateData = {
+      player: {
+        inventory: gameState.player.inventory,
+        location: {
+          lat: gameState.player.location.lat,
+          lng: gameState.player.location.lng,
+        },
+        points: gameState.player.points,
+      },
+      cellStates: Array.from(_cellCaretaker.getAllStates().entries()),
+      victoryState: gameState.isVictoryAchieved,
+      movementType: movementManager.getCurrentMovementType(),
+    };
+
+    localStorage.setItem(
+      GamePersistenceManager.STORAGE_KEY,
+      JSON.stringify(gameStateData),
+    );
+    console.log("Game state saved to localStorage");
+  }
+
+  loadGameState(): boolean {
+    const saved = localStorage.getItem(GamePersistenceManager.STORAGE_KEY);
+    if (!saved) return false;
+
+    try {
+      const gameStateData = JSON.parse(saved) as {
+        player: {
+          inventory: Token | null;
+          location: { lat: number; lng: number };
+          points: number;
+        };
+        cellStates: [string, { token: Token | null }][];
+        victoryState: boolean;
+        movementType: string;
+      };
+
+      // Restore player state
+      gameState.player.inventory = gameStateData.player.inventory;
+      gameState.player.location = leaflet.latLng(
+        gameStateData.player.location.lat,
+        gameStateData.player.location.lng,
+      );
+      gameState.player.points = gameStateData.player.points;
+      gameState.isVictoryAchieved = gameStateData.victoryState;
+
+      // Restore cell states
+      gameStateData.cellStates.forEach(([cellKey, memento]) => {
+        _cellCaretaker.saveState(cellKey, memento.token);
+      });
+
+      console.log("Game state loaded from localStorage");
+
+      // Ensure player marker is updated after loading
+      if (typeof playerMarker !== "undefined") {
+        playerMarker.setLatLng(gameState.player.location);
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Failed to load game state:", error);
+      return false;
+    }
+  }
+
+  clearGameState(): void {
+    localStorage.removeItem(GamePersistenceManager.STORAGE_KEY);
+    _cellCaretaker.getAllStates().clear();
+
+    // Reset game state
+    gameState.player.inventory = null;
+    gameState.player.location = CONFIG.CLASSROOM_LOCATION;
+    gameState.player.points = 0;
+    gameState.isVictoryAchieved = false;
+
+    console.log("Game state cleared");
+  }
+}
+
+const gamePersistence = new GamePersistenceManager();
+
+// =============================================
 // MOVEMENT CONTROL INTERFACE (FACADE PATTERN)
 // =============================================
 
@@ -22,25 +111,25 @@ class ButtonMovementController implements MovementController {
   private active: boolean = false;
   private movementCallbacks:
     ((direction: "north" | "south" | "east" | "west" | "center") => void)[] =
-      [];
-
-  // deno-lint-ignore require-await
-  async initialize(): Promise<void> {
+    [];
+  
+  initialize(): Promise<void> {
     console.log("Button movement controller initialized");
+    return Promise.resolve();
   }
 
-  // deno-lint-ignore require-await
-  async enable(): Promise<void> {
+  enable(): Promise<void> {
     this.active = true;
     this.updateButtonAccessibility();
     console.log("Button movement enabled");
+    return Promise.resolve();
   }
 
-  // deno-lint-ignore require-await
-  async disable(): Promise<void> {
+  disable(): Promise<void> {
     this.active = false;
     this.updateButtonAccessibility();
     console.log("Button movement disabled");
+    return Promise.resolve();
   }
 
   getMovementType(): string {
@@ -106,56 +195,96 @@ class GeolocationMovementController implements MovementController {
   private lastPosition: GeolocationPosition | null = null;
   private calibrationOffset: { lat: number; lng: number } | null = null;
   private isCalibrated: boolean = false;
-  private movementThreshold: number = 0.00002; // Minimum movement to trigger update
+  private movementThreshold: number = 0.00018;
 
-  async initialize(): Promise<void> {
+  // Marker for real location
+  private realLocationMarker: leaflet.Marker | null = null;
+
+  initialize(): Promise<void> {
     if (!navigator.geolocation) {
       throw new Error("Geolocation is not supported by this browser");
     }
-
-    // Request permission and get initial position for calibration
-    try {
-      const position = await new Promise<GeolocationPosition>(
-        (resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 0,
-          });
-        },
-      );
-
-      this.calibrate(position);
-      console.log("Geolocation movement controller initialized and calibrated");
-    } catch (error) {
-      console.warn("Could not get initial position for calibration:", error);
-    }
+    console.log("Geolocation movement controller initialized");
+    return Promise.resolve();
   }
 
-  // deno-lint-ignore require-await
+  // This method async operations through callbacks
   async enable(): Promise<void> {
     if (this.active) return;
 
     this.active = true;
 
-    if (navigator.geolocation) {
-      this.watchId = navigator.geolocation.watchPosition(
-        (position) => this.handlePositionUpdate(position),
-        (error) => this.handleGeolocationError(error),
-        {
-          enableHighAccuracy: true,
-          maximumAge: 1000,
-          timeout: 5000,
-        },
-      );
+    // Check geolocation permissions first
+    try {
+      if (navigator.permissions) {
+        const permissionState = await navigator.permissions.query({
+          name: "geolocation",
+        });
+        if (permissionState.state === "denied") {
+          throw new Error(
+            "Geolocation permission denied. Please enable location access in browser settings.",
+          );
+        }
+      }
+    } catch (error) {
+      console.warn("Permission check failed, proceeding anyway:", error);
     }
 
-    console.log("Geolocation movement enabled");
+    // Create real location marker
+    this.realLocationMarker = leaflet.marker([0, 0], {
+      icon: leaflet.divIcon({
+        className: "real-location-marker",
+        html: "📍",
+        iconSize: [20, 20],
+        iconAnchor: [10, 10],
+      }),
+    });
+    this.realLocationMarker.addTo(map);
+    this.realLocationMarker.bindTooltip("Your REAL location (GPS)");
+
+    return new Promise((resolve, reject) => {
+      if (navigator.geolocation) {
+        // First get current position for calibration
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            this.calibrate(position);
+            // Then start watching
+            this.watchId = navigator.geolocation.watchPosition(
+              (position) => this.handlePositionUpdate(position),
+              (error) => this.handleGeolocationError(error),
+              {
+                enableHighAccuracy: true,
+                maximumAge: 1000,
+                timeout: 5000,
+              },
+            );
+            console.log("Geolocation movement enabled");
+            resolve();
+          },
+          (error) => {
+            this.handleGeolocationError(error);
+            reject(error);
+          },
+          {
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0,
+          },
+        );
+      } else {
+        reject(new Error("Geolocation not available"));
+      }
+    });
   }
 
-  // deno-lint-ignore require-await
-  async disable(): Promise<void> {
+  disable(): Promise<void> {
     this.active = false;
+
+    // Remove real location marker when disabling
+    if (this.realLocationMarker) {
+      map.removeLayer(this.realLocationMarker);
+      this.realLocationMarker = null;
+    }
 
     if (this.watchId !== null) {
       navigator.geolocation.clearWatch(this.watchId);
@@ -163,6 +292,7 @@ class GeolocationMovementController implements MovementController {
     }
 
     console.log("Geolocation movement disabled");
+    return Promise.resolve();
   }
 
   getMovementType(): string {
@@ -182,16 +312,45 @@ class GeolocationMovementController implements MovementController {
   }
 
   private calibrate(position: GeolocationPosition): void {
-    const currentLat = gameState.player.location.lat;
-    const currentLng = gameState.player.location.lng;
+    // Make real location the game center
+    const currentGameLat = gameState.player.location.lat;
+    const currentGameLng = gameState.player.location.lng;
 
+    const realLat = position.coords.latitude;
+    const realLng = position.coords.longitude;
+
+    // Calculate offset so real location becomes the game center
     this.calibrationOffset = {
-      lat: currentLat - position.coords.latitude,
-      lng: currentLng - position.coords.longitude,
+      lat: currentGameLat - realLat,
+      lng: currentGameLng - realLng,
     };
 
     this.isCalibrated = true;
-    console.log("Geolocation calibrated with offset:", this.calibrationOffset);
+
+    console.log(
+      "🎯 NEW CALIBRATION - Your real location is now the game center:",
+      {
+        realLocation: `(${realLat.toFixed(6)}, ${realLng.toFixed(6)})`,
+        gameCenter: `(${currentGameLat.toFixed(6)}, ${
+          currentGameLng.toFixed(6)
+        })`,
+        offset: `(${this.calibrationOffset.lat.toFixed(6)}, ${
+          this.calibrationOffset.lng.toFixed(6)
+        })`,
+        explanation:
+          `Your physical location is now the center of the game world`,
+      },
+    );
+
+    const statusPanel = document.getElementById("statusPanel");
+    if (statusPanel) {
+      statusPanel.textContent =
+        "🎯 Calibrated! Your current location is now the game center. Move around!";
+      setTimeout(() => updateUI(), 5000);
+    }
+
+    // Immediately update to the calibrated position
+    this.updatePlayerPosition(currentGameLat, currentGameLng);
   }
 
   private handlePositionUpdate(position: GeolocationPosition): void {
@@ -199,8 +358,29 @@ class GeolocationMovementController implements MovementController {
 
     if (!this.active) return;
 
+    // Show real location marker
+    if (this.realLocationMarker) {
+      const realLatLng = leaflet.latLng(
+        position.coords.latitude,
+        position.coords.longitude,
+      );
+      this.realLocationMarker.setLatLng(realLatLng);
+    }
+
+    // Debug logging to see raw geolocation data
+    console.log("🔍 Raw geolocation data:", {
+      realLat: position.coords.latitude,
+      realLng: position.coords.longitude,
+      accuracy: position.coords.accuracy + " meters",
+      heading: position.coords.heading,
+      speed: position.coords.speed,
+      calibrated: this.isCalibrated,
+      offset: this.calibrationOffset,
+    });
+
     // Calibrate on first position update if not already calibrated
     if (!this.isCalibrated) {
+      console.log("🔄 First position received, calibrating...");
       this.calibrate(position);
       return;
     }
@@ -208,6 +388,16 @@ class GeolocationMovementController implements MovementController {
     // Apply calibration offset to convert real-world coordinates to game coordinates
     const gameLat = position.coords.latitude + this.calibrationOffset!.lat;
     const gameLng = position.coords.longitude + this.calibrationOffset!.lng;
+
+    console.log("🎮 Transformed coordinates:", {
+      realWorld: `(${position.coords.latitude.toFixed(6)}, ${
+        position.coords.longitude.toFixed(6)
+      })`,
+      gameWorld: `(${gameLat.toFixed(6)}, ${gameLng.toFixed(6)})`,
+      currentPlayer: `(${gameState.player.location.lat.toFixed(6)}, ${
+        gameState.player.location.lng.toFixed(6)
+      })`,
+    });
 
     // Calculate distance from current position
     const distance = this.calculateDistance(
@@ -217,8 +407,24 @@ class GeolocationMovementController implements MovementController {
       gameLng,
     );
 
+    const distanceInMeters = this.calculateDistanceInMeters(
+      gameState.player.location.lat,
+      gameState.player.location.lng,
+      gameLat,
+      gameLng,
+    );
+
+    console.log(
+      `📏 Movement check: ${distance.toFixed(8)} (coord units) / ${
+        distanceInMeters.toFixed(2)
+      } meters vs threshold: ${this.movementThreshold}`,
+    );
+
     if (distance >= this.movementThreshold) {
+      console.log("Moving player to new position");
       this.updatePlayerPosition(gameLat, gameLng);
+    } else {
+      console.log("Movement below threshold, staying in place");
     }
   }
 
@@ -233,6 +439,22 @@ class GeolocationMovementController implements MovementController {
     return Math.sqrt(dLat * dLat + dLng * dLng);
   }
 
+  private calculateDistanceInMeters(
+    lat1: number,
+    lng1: number,
+    lat2: number,
+    lng2: number,
+  ): number {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
   private updatePlayerPosition(newLat: number, newLng: number): void {
     const currentLat = gameState.player.location.lat;
     const currentLng = gameState.player.location.lng;
@@ -242,10 +464,9 @@ class GeolocationMovementController implements MovementController {
     // Update game state
     gameState.player.location = leaflet.latLng(smoothLat, smoothLng);
 
-    // Update marker position
+    // Update the actual player marker, not just game state
     playerMarker.setLatLng(gameState.player.location);
 
-    // Update map view to follow player with smooth transition
     map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL, {
       animate: true,
       duration: 0.5,
@@ -255,6 +476,9 @@ class GeolocationMovementController implements MovementController {
     // Update cell visibility and interaction range
     updateCellVisibility();
     updateInteractionRangeDisplay();
+
+    // Save game state when player moves
+    gamePersistence.saveGameState();
 
     console.log(
       `Player moved via geolocation to: ${smoothLat.toFixed(6)}, ${
@@ -312,11 +536,13 @@ class MovementManager {
   private controllers: Map<string, MovementController>;
   private currentController: MovementController | null = null;
   private movementChangeCallbacks: ((type: string) => void)[] = [];
+  private buttonController: ButtonMovementController | null = null;
 
   constructor() {
     this.controllers = new Map();
 
-    this.controllers.set("buttons", new ButtonMovementController());
+    this.buttonController = new ButtonMovementController();
+    this.controllers.set("buttons", this.buttonController);
     this.controllers.set("geolocation", new GeolocationMovementController());
   }
 
@@ -344,6 +570,7 @@ class MovementManager {
         console.warn(
           "Geolocation requested via URL but not available in browser",
         );
+        // Stay with buttons as default
       }
     } else if (movementParam && movementParam !== "buttons") {
       console.warn(
@@ -352,6 +579,9 @@ class MovementManager {
     }
 
     await this.switchToMovementType(initialMovementType);
+
+    // Connect button controller callbacks after initialization
+    this.connectButtonController();
   }
 
   async switchToMovementType(type: string): Promise<boolean> {
@@ -379,6 +609,9 @@ class MovementManager {
     try {
       this.currentController = newController;
       await this.currentController.enable();
+
+      // Sync player marker when switching modes
+      this.syncPlayerMarker();
 
       console.log(`Switched to ${type} movement`);
 
@@ -456,6 +689,19 @@ class MovementManager {
     globalThis.history.replaceState({}, "", url.toString());
   }
 
+  private syncPlayerMarker(): void {
+    // Ensure player marker is at the correct location
+    playerMarker.setLatLng(gameState.player.location);
+
+    // Update map view if needed
+    if (this.currentController?.getMovementType() === "geolocation") {
+      map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL, {
+        animate: true,
+        duration: 0.5,
+      });
+    }
+  }
+
   private updateMovementUI(): void {
     const movementType = this.currentController?.getMovementType() || "unknown";
 
@@ -508,8 +754,18 @@ class MovementManager {
   }
 
   private updateMovementInstructions(movementType: string): void {
-    const instructionsElement = document.getElementById("movementInstructions");
-    if (!instructionsElement) return;
+    let instructionsElement = document.getElementById("movementInstructions");
+
+    // Create element if it doesn't exist
+    if (!instructionsElement) {
+      instructionsElement = document.createElement("div");
+      instructionsElement.id = "movementInstructions";
+      const movementPanel = document.getElementById("movementPanel");
+      if (movementPanel) {
+        movementPanel.appendChild(instructionsElement);
+      }
+      return;
+    }
 
     if (movementType === "geolocation") {
       instructionsElement.innerHTML = `
@@ -530,6 +786,15 @@ class MovementManager {
           </p>
         </div>
       `;
+    }
+  }
+
+  // Connect button controller to movement system
+  private connectButtonController(): void {
+    if (this.buttonController) {
+      this.buttonController.onMove((direction) => {
+        movePlayer(direction);
+      });
     }
   }
 
@@ -845,8 +1110,54 @@ function markCellAsModified(cell: GridCell): void {
 }
 
 // =============================================
-// DEBUG
+// DEBUG & NEW GAME CONTROLS
 // =============================================
+
+function addNewGameControls(): void {
+  const newGamePanel = document.createElement("div");
+  newGamePanel.id = "newGamePanel";
+  newGamePanel.innerHTML = `
+    <div style="margin: 10px 0;">
+      <button id="newGameButton" style="padding: 10px 16px; background: #ff4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">
+        Start New Game
+      </button>
+      <button id="saveGameButton" style="padding: 10px 16px; background: #44ff44; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-left: 10px;">
+        Save Game
+      </button>
+    </div>
+  `;
+
+  document.getElementById("controlPanel")!.appendChild(newGamePanel);
+
+  document.getElementById("newGameButton")!.addEventListener("click", () => {
+    if (
+      confirm(
+        "Are you sure you want to start a new game? All progress will be lost!",
+      )
+    ) {
+      gamePersistence.clearGameState();
+      cleanupAllCells();
+      updateCellVisibility();
+      updateInventoryDisplay();
+      updateUI();
+
+      // Reset map view to classroom
+      map.setView(CONFIG.CLASSROOM_LOCATION, CONFIG.ZOOM_LEVEL);
+      playerMarker.setLatLng(CONFIG.CLASSROOM_LOCATION);
+
+      console.log("New game started");
+    }
+  });
+
+  document.getElementById("saveGameButton")!.addEventListener("click", () => {
+    gamePersistence.saveGameState();
+    const statusPanel = document.getElementById("statusPanel");
+    if (statusPanel) {
+      statusPanel.textContent = "Game saved successfully!";
+      setTimeout(() => updateUI(), 2000);
+    }
+  });
+}
 
 function addDebugControls(): void {
   const debugPanel = document.createElement("div");
@@ -1141,6 +1452,9 @@ function attemptMerge(cell: GridCell): boolean {
   updateInventoryDisplay();
   updateUI();
 
+  // Save game state after merge
+  gamePersistence.saveGameState();
+
   console.log(`Successful merge. New token value: ${newToken.value}`);
   checkVictoryCondition(newToken);
   return true;
@@ -1175,6 +1489,9 @@ function pickupTokenFromCell(cell: GridCell): void {
 
   updateCellVisualization(cell);
   updateInventoryDisplay();
+
+  // Save game state after pickup
+  gamePersistence.saveGameState();
 }
 
 function dropTokenToCell(cell: GridCell): boolean {
@@ -1190,6 +1507,9 @@ function dropTokenToCell(cell: GridCell): boolean {
 
   updateCellVisualization(cell);
   updateInventoryDisplay();
+
+  // Save game state after drop
+  gamePersistence.saveGameState();
 
   return true;
 }
@@ -1277,7 +1597,7 @@ function updateInteractionRangeDisplay(): void {
 }
 
 // =============================================
-// ENHANCED MOVEMENT CONTROLS UI
+// MOVEMENT CONTROLS UI
 // =============================================
 
 function addMovementControls(): void {
@@ -1512,6 +1832,9 @@ function movePlayer(
   updateCellVisibility();
   updateInteractionRangeDisplay();
 
+  // Save game state when player moves
+  gamePersistence.saveGameState();
+
   console.log(`Player moved ${direction} to:`, gameState.player.location);
 }
 
@@ -1722,9 +2045,18 @@ async function initializeGame() {
   initializeDOM();
   map = initializeMap();
 
+  // Load saved game state first
+  const loaded = gamePersistence.loadGameState();
+  if (loaded) {
+    playerMarker.setLatLng(gameState.player.location);
+    map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL);
+    console.log("Loaded saved game state");
+  }
+
   await movementManager.initialize();
 
   setupMovementControls();
+  addNewGameControls(); // Add new game controls
   addDebugControls();
   cleanupAllCells();
   updateCellVisibility();
@@ -1732,6 +2064,11 @@ async function initializeGame() {
   map.on("moveend", handleMapMove);
   updateInventoryDisplay();
   updateUI();
+
+  // Auto-save every 30 seconds
+  setInterval(() => {
+    gamePersistence.saveGameState();
+  }, 30000);
 
   setTimeout(logMemoryStats, 1000);
 }

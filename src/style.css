@@ -5,7 +5,7 @@
 }
 
 body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   line-height: 1.6;
   color: #333;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -132,7 +132,7 @@ button:active:not(:disabled) {
 
 /* Movement Toggle Button */
 #movementToggle {
-  background: linear-gradient(135deg, #4CAF50, #45a049);
+  background: linear-gradient(135deg, #4caf50, #45a049);
   color: white;
   padding: 12px 20px;
   border-radius: 8px;
@@ -141,13 +141,13 @@ button:active:not(:disabled) {
 }
 
 #movementToggle:hover:not(:disabled) {
-  background: linear-gradient(135deg, #45a049, #4CAF50);
+  background: linear-gradient(135deg, #45a049, #4caf50);
   box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4);
 }
 
 /* Recalibrate Button */
 #recalibrateButton {
-  background: linear-gradient(135deg, #FF9800, #f57c00);
+  background: linear-gradient(135deg, #ff9800, #f57c00);
   color: white;
   padding: 12px 20px;
   border-radius: 8px;
@@ -156,7 +156,7 @@ button:active:not(:disabled) {
 }
 
 #recalibrateButton:hover:not(:disabled) {
-  background: linear-gradient(135deg, #f57c00, #FF9800);
+  background: linear-gradient(135deg, #f57c00, #ff9800);
   box-shadow: 0 6px 20px rgba(255, 152, 0, 0.4);
 }
 
@@ -170,9 +170,9 @@ button:active:not(:disabled) {
   box-shadow: 0 4px 12px rgba(66, 133, 244, 0.3);
 }
 
-#moveNorth:hover:not(:disabled), 
-#moveSouth:hover:not(:disabled), 
-#moveEast:hover:not(:disabled), 
+#moveNorth:hover:not(:disabled),
+#moveSouth:hover:not(:disabled),
+#moveEast:hover:not(:disabled),
 #moveWest:hover:not(:disabled) {
   background: linear-gradient(135deg, #3367d6, #4285f4);
   box-shadow: 0 6px 20px rgba(66, 133, 244, 0.4);
@@ -267,7 +267,7 @@ button:disabled {
 }
 
 #statusPanel:has(> br) {
-  background: linear-gradient(135deg, #4CAF50, #45a049);
+  background: linear-gradient(135deg, #4caf50, #45a049);
   color: white;
   font-size: 1.2rem;
   padding: 1.5rem;
@@ -290,28 +290,28 @@ button:disabled {
   body {
     padding: 0.5rem;
   }
-  
+
   #controlPanel, #map, #statusPanel {
     margin: 0.5rem;
   }
-  
+
   #controlPanel {
     padding: 1rem;
   }
-  
+
   h2 {
     font-size: 1.5rem;
   }
-  
+
   #movementPanel {
     padding: 1rem;
   }
-  
+
   .inventory-display {
     padding: 0.5rem 0.75rem;
     font-size: 0.9rem;
   }
-  
+
   button {
     padding: 10px 14px !important;
     font-size: 0.9rem !important;
@@ -322,11 +322,11 @@ button:disabled {
   #gameInstructions ul {
     margin-left: 1rem;
   }
-  
+
   #movementInstructions > div {
     padding: 0.75rem;
   }
-  
+
   #debugPanel button {
     display: block;
     width: 100%;
@@ -366,12 +366,12 @@ button:focus {
     box-shadow: none;
     border: 1px solid #ccc;
   }
-  
+
   #map {
     box-shadow: none;
     border: 1px solid #ccc;
   }
-  
+
   button {
     display: none;
   }
