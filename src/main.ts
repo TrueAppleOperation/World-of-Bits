@@ -1508,8 +1508,7 @@ function dropTokenToCell(cell: GridCell): boolean {
   updateCellVisualization(cell);
   updateInventoryDisplay();
 
-  // Save game state after drop 
-  //New Comment for Commit Purposes
+  // Save game state after drop
   gamePersistence.saveGameState();
 
   return true;
