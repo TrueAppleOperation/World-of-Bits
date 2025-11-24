@@ -543,6 +543,18 @@ class MovementManager {
     // Enable new controller
     try {
       this.currentController = newController;
+
+      // Special handling for mobile geolocation
+      if (
+        type === "geolocation" &&
+        /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+      ) {
+        console.log("Mobile device detected - using mobile geolocation setup");
+
+        // Add a small delay to ensure the button click is processed
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
       await this.currentController.enable();
 
       // Sync player marker when switching modes
@@ -561,17 +573,36 @@ class MovementManager {
     } catch (error) {
       console.error(`Failed to switch to ${type} movement:`, error);
 
-      // Fallback logic
+      // Enhanced fallback logic for mobile
       if (type === "geolocation") {
         console.log(
           "Falling back to button controls due to geolocation failure",
         );
+
         const statusPanel = document.getElementById("statusPanel");
         if (statusPanel) {
-          statusPanel.textContent =
-            "Geolocation unavailable. Using button controls.";
-          setTimeout(() => updateUI(), 3000);
+          let errorMessage = "Geolocation unavailable. ";
+
+          if (error instanceof Error) {
+            if (
+              error.message.includes("permission denied") ||
+              error.message.includes("Permission denied")
+            ) {
+              errorMessage +=
+                "Please enable location permissions in your browser settings.";
+            } else if (error.message.includes("timeout")) {
+              errorMessage += "Location request timed out.";
+            } else {
+              errorMessage += error.message;
+            }
+          }
+
+          errorMessage += " Using button controls.";
+          statusPanel.textContent = errorMessage;
+          setTimeout(() => updateUI(), 5000);
         }
+
+        // Ensure we fall back to buttons
         return await this.switchToMovementType("buttons");
       }
       return false;
@@ -703,23 +734,35 @@ class MovementManager {
 
     if (movementType === "geolocation") {
       instructionsElement.innerHTML = `
-        <div style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px; border-left: 4px solid #2196F3;">
-          <p style="margin: 0; font-size: 0.9em; color: #1565C0;">
-            <strong>Geolocation Active</strong><br>
-            Move around in the real world to navigate the map. 
-            The game will follow your physical location.
-          </p>
-        </div>
-      `;
+      <div style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px; border-left: 4px solid #2196F3;">
+        <p style="margin: 0; font-size: 0.9em; color: #1565C0;">
+          <strong>Geolocation Active</strong><br>
+          ${
+        isMobileDevice()
+          ? "Move around in the real world to navigate. The game follows your location."
+          : "Move around in the real world to navigate the map."
+      }
+          ${
+        isMobileDevice()
+          ? "<br><small>Make sure location permissions are enabled.</small>"
+          : ""
+      }
+        </p>
+      </div>
+    `;
     } else {
       instructionsElement.innerHTML = `
-        <div style="margin: 10px 0; padding: 10px; background: #e8f5e8; border-radius: 4px; border-left: 4px solid #4CAF50;">
-          <p style="margin: 0; font-size: 0.9em; color: #2e7d32;">
-            <strong>Button Controls Active</strong><br>
-            Use the directional buttons above to navigate the map.
-          </p>
-        </div>
-      `;
+      <div style="margin: 10px 0; padding: 10px; background: #e8f5e8; border-radius: 4px; border-left: 4px solid #4CAF50;">
+        <p style="margin: 0; font-size: 0.9em; color: #2e7d32;">
+          <strong>Button Controls Active</strong><br>
+          ${
+        isMobileDevice()
+          ? "Tap the directional buttons to navigate."
+          : "Use the directional buttons above to navigate the map."
+      }
+        </p>
+      </div>
+    `;
     }
   }
 
@@ -1546,12 +1589,14 @@ function addMovementControls(): void {
 }
 
 function setupMovementControls(): void {
-  const get = (id: string) => document.getElementById(id)!;
+  const getButton = (id: string) =>
+    document.getElementById(id) as HTMLButtonElement;
+
   const setupMoveButton = (
     id: string,
     direction: "north" | "south" | "east" | "west" | "center",
   ) => {
-    const button = get(id);
+    const button = getButton(id);
     button.addEventListener("click", () => {
       if (movementManager.getCurrentMovementType() === "buttons") {
         // Add click animation
@@ -1582,7 +1627,7 @@ function setupMovementControls(): void {
   setupMoveButton("moveEast", "east");
   setupMoveButton("moveWest", "west");
 
-  const centerButton = get("moveCenter");
+  const centerButton = getButton("moveCenter");
   centerButton.addEventListener("click", () => {
     if (movementManager.getCurrentMovementType() === "buttons") {
       centerButton.style.transform = "scale(0.95)";
@@ -1593,7 +1638,7 @@ function setupMovementControls(): void {
     }
   });
 
-  const toggleButton = get("movementToggle");
+  const toggleButton = getButton("movementToggle");
   toggleButton.addEventListener("click", toggleMovementType);
 
   toggleButton.addEventListener("mouseenter", () => {
@@ -1605,7 +1650,7 @@ function setupMovementControls(): void {
   });
 
   // Recalibrate button
-  const recalibrateButton = get("recalibrateButton");
+  const recalibrateButton = getButton("recalibrateButton");
   recalibrateButton.addEventListener("click", recalibrateGeolocation);
 
   recalibrateButton.addEventListener("mouseenter", () => {
@@ -1653,21 +1698,88 @@ function updateButtonStates(movementType: string): void {
   });
 }
 
-function toggleMovementType(): void {
+function isMobileDevice(): boolean {
+  return /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+    navigator.userAgent,
+  );
+}
+
+async function toggleMovementType(): Promise<void> {
   const currentType = movementManager.getCurrentMovementType();
   const newType = currentType === "buttons" ? "geolocation" : "buttons";
-  const toggleButton = document.getElementById("movementToggle")!;
-  toggleButton.style.transform = "scale(0.95)";
+  const toggleButton = document.getElementById(
+    "movementToggle",
+  ) as HTMLButtonElement;
 
-  movementManager.switchToMovementType(newType).then((success) => {
-    setTimeout(() => {
-      toggleButton.style.transform = "scale(1)";
-    }, 150);
+  if (!toggleButton) return;
+
+  // Visual feedback
+  toggleButton.style.transform = "scale(0.95)";
+  toggleButton.disabled = true;
+  const _originalText = toggleButton.textContent;
+  toggleButton.textContent = "Switching...";
+
+  try {
+    const success = await movementManager.switchToMovementType(newType);
 
     if (success) {
       console.log(`Movement switched to: ${newType}`);
+
+      // Special handling for mobile geolocation
+      if (
+        newType === "geolocation" &&
+        /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+      ) {
+        const statusPanel = document.getElementById("statusPanel");
+        if (statusPanel) {
+          statusPanel.textContent =
+            "Geolocation activated! Move around to explore the map.";
+          setTimeout(() => updateUI(), 3000);
+        }
+      }
+    } else {
+      // If switching failed, revert the toggle button state
+      const currentTypeAfterFailure = movementManager.getCurrentMovementType();
+      updateToggleButtonState(currentTypeAfterFailure);
     }
-  });
+  } catch (error) {
+    console.error("Failed to switch movement type:", error);
+
+    const statusPanel = document.getElementById("statusPanel");
+    if (statusPanel) {
+      statusPanel.textContent =
+        "Failed to switch movement type. Using button controls.";
+      setTimeout(() => updateUI(), 3000);
+    }
+
+    await movementManager.switchToMovementType("buttons");
+  } finally {
+    // Always reset button state
+    setTimeout(() => {
+      toggleButton.style.transform = "scale(1)";
+      toggleButton.disabled = false;
+      updateToggleButtonState(movementManager.getCurrentMovementType());
+    }, 150);
+  }
+}
+
+function updateToggleButtonState(movementType: string): void {
+  const toggleButton = document.getElementById(
+    "movementToggle",
+  ) as HTMLButtonElement;
+  if (!toggleButton) return;
+
+  const isGeolocation = movementType === "geolocation";
+
+  toggleButton.textContent = `Movement: ${movementType} (Click to switch)`;
+
+  if (isGeolocation) {
+    toggleButton.style.background = "#2196F3";
+    toggleButton.style.boxShadow = "0 2px 4px rgba(33, 150, 243, 0.3)";
+  } else {
+    toggleButton.style.background = "#4CAF50";
+    toggleButton.style.boxShadow = "0 2px 4px rgba(76, 175, 80, 0.3)";
+  }
 }
 
 function recalibrateGeolocation(): void {
