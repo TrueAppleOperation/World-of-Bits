@@ -234,7 +234,6 @@ class GeolocationMovementController implements MovementController {
     this.realLocationMarker = leaflet.marker([0, 0], {
       icon: leaflet.divIcon({
         className: "real-location-marker",
-        html: "📍",
         iconSize: [20, 20],
         iconAnchor: [10, 10],
       }),
@@ -280,7 +279,6 @@ class GeolocationMovementController implements MovementController {
   disable(): Promise<void> {
     this.active = false;
 
-    // Remove real location marker when disabling
     if (this.realLocationMarker) {
       map.removeLayer(this.realLocationMarker);
       this.realLocationMarker = null;
@@ -312,45 +310,35 @@ class GeolocationMovementController implements MovementController {
   }
 
   private calibrate(position: GeolocationPosition): void {
-    // Make real location the game center
-    const currentGameLat = gameState.player.location.lat;
-    const currentGameLng = gameState.player.location.lng;
-
     const realLat = position.coords.latitude;
     const realLng = position.coords.longitude;
 
-    // Calculate offset so real location becomes the game center
-    this.calibrationOffset = {
-      lat: currentGameLat - realLat,
-      lng: currentGameLng - realLng,
-    };
+    this.calibrationOffset = { lat: 0, lng: 0 };
+
+    // Update game state to real location
+    gameState.player.location = leaflet.latLng(realLat, realLng);
 
     this.isCalibrated = true;
 
     console.log(
-      "🎯 NEW CALIBRATION - Your real location is now the game center:",
+      "Reset Calibration - Game center moved to your real location:",
       {
-        realLocation: `(${realLat.toFixed(6)}, ${realLng.toFixed(6)})`,
-        gameCenter: `(${currentGameLat.toFixed(6)}, ${
-          currentGameLng.toFixed(6)
-        })`,
-        offset: `(${this.calibrationOffset.lat.toFixed(6)}, ${
-          this.calibrationOffset.lng.toFixed(6)
-        })`,
-        explanation:
-          `Your physical location is now the center of the game world`,
+        newGameCenter: `(${realLat.toFixed(6)}, ${realLng.toFixed(6)})`,
+        explanation: `Game world recentered to your current physical location`,
       },
     );
 
     const statusPanel = document.getElementById("statusPanel");
     if (statusPanel) {
-      statusPanel.textContent =
-        "🎯 Calibrated! Your current location is now the game center. Move around!";
+      statusPanel.textContent = `Game recentered to your location (${
+        realLat.toFixed(4)
+      }, ${realLng.toFixed(4)})`;
       setTimeout(() => updateUI(), 5000);
     }
 
-    // Immediately update to the calibrated position
-    this.updatePlayerPosition(currentGameLat, currentGameLng);
+    // Update marker immediately
+    playerMarker.setLatLng(gameState.player.location);
+    map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL);
   }
 
   private handlePositionUpdate(position: GeolocationPosition): void {
@@ -367,110 +355,42 @@ class GeolocationMovementController implements MovementController {
       this.realLocationMarker.setLatLng(realLatLng);
     }
 
-    // Debug logging to see raw geolocation data
-    console.log("🔍 Raw geolocation data:", {
+    // Debug logging
+    console.log("Raw geolocation data:", {
       realLat: position.coords.latitude,
       realLng: position.coords.longitude,
       accuracy: position.coords.accuracy + " meters",
-      heading: position.coords.heading,
-      speed: position.coords.speed,
-      calibrated: this.isCalibrated,
-      offset: this.calibrationOffset,
+      timestamp: new Date().toISOString(),
     });
 
     // Calibrate on first position update if not already calibrated
     if (!this.isCalibrated) {
-      console.log("🔄 First position received, calibrating...");
+      console.log("First position received, calibrating...");
       this.calibrate(position);
       return;
     }
 
-    // Apply calibration offset to convert real-world coordinates to game coordinates
+    // Apply calibration offset
     const gameLat = position.coords.latitude + this.calibrationOffset!.lat;
     const gameLng = position.coords.longitude + this.calibrationOffset!.lng;
 
-    console.log("🎮 Transformed coordinates:", {
-      realWorld: `(${position.coords.latitude.toFixed(6)}, ${
-        position.coords.longitude.toFixed(6)
-      })`,
-      gameWorld: `(${gameLat.toFixed(6)}, ${gameLng.toFixed(6)})`,
-      currentPlayer: `(${gameState.player.location.lat.toFixed(6)}, ${
-        gameState.player.location.lng.toFixed(6)
-      })`,
-    });
-
-    // Calculate distance from current position
-    const distance = this.calculateDistance(
-      gameState.player.location.lat,
-      gameState.player.location.lng,
-      gameLat,
-      gameLng,
-    );
-
-    const distanceInMeters = this.calculateDistanceInMeters(
-      gameState.player.location.lat,
-      gameState.player.location.lng,
-      gameLat,
-      gameLng,
-    );
-
-    console.log(
-      `📏 Movement check: ${distance.toFixed(8)} (coord units) / ${
-        distanceInMeters.toFixed(2)
-      } meters vs threshold: ${this.movementThreshold}`,
-    );
-
-    if (distance >= this.movementThreshold) {
-      console.log("Moving player to new position");
-      this.updatePlayerPosition(gameLat, gameLng);
-    } else {
-      console.log("Movement below threshold, staying in place");
-    }
-  }
-
-  private calculateDistance(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-  ): number {
-    const dLat = lat2 - lat1;
-    const dLng = lng2 - lng1;
-    return Math.sqrt(dLat * dLat + dLng * dLng);
-  }
-
-  private calculateDistanceInMeters(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-  ): number {
-    const R = 6371000; // Earth's radius in meters
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLng = (lng2 - lng1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-        Math.sin(dLng / 2) * Math.sin(dLng / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+    console.log("Updating player position via geolocation");
+    this.updatePlayerPosition(gameLat, gameLng);
   }
 
   private updatePlayerPosition(newLat: number, newLng: number): void {
-    const currentLat = gameState.player.location.lat;
-    const currentLng = gameState.player.location.lng;
-    const smoothLat = currentLat + (newLat - currentLat) * 0.7;
-    const smoothLng = currentLng + (newLng - currentLng) * 0.7;
+    // Use the exact coordinates from geolocation
+    const finalLat = newLat;
+    const finalLng = newLng;
 
-    // Update game state
-    gameState.player.location = leaflet.latLng(smoothLat, smoothLng);
-
-    // Update the actual player marker, not just game state
+    gameState.player.location = leaflet.latLng(finalLat, finalLng);
     playerMarker.setLatLng(gameState.player.location);
 
+    // Update map view to follow player
     map.setView(gameState.player.location, CONFIG.ZOOM_LEVEL, {
       animate: true,
-      duration: 0.5,
-      easeLinearity: 0.25,
+      duration: 0.1,
+      easeLinearity: 0.5,
     });
 
     // Update cell visibility and interaction range
@@ -479,11 +399,13 @@ class GeolocationMovementController implements MovementController {
 
     // Save game state when player moves
     gamePersistence.saveGameState();
+    this.debugMarkerPosition();
 
     console.log(
-      `Player moved via geolocation to: ${smoothLat.toFixed(6)}, ${
-        smoothLng.toFixed(6)
+      `Player moved via geolocation to: ${finalLat.toFixed(6)}, ${
+        finalLng.toFixed(6)
       }`,
+      `Marker at: ${playerMarker.getLatLng()}`,
     );
   }
 
@@ -513,8 +435,22 @@ class GeolocationMovementController implements MovementController {
       setTimeout(() => updateUI(), 5000);
     }
 
-    // Fall back to button controls
     movementManager.switchToMovementType("buttons");
+  }
+
+  private debugMarkerPosition(): void {
+    if (playerMarker) {
+      const markerPos = playerMarker.getLatLng();
+      const gameStatePos = gameState.player.location;
+
+      console.log("Marker Debug:", {
+        markerPosition: markerPos,
+        gameStatePosition: gameStatePos,
+        positionsMatch: markerPos.lat === gameStatePos.lat &&
+          markerPos.lng === gameStatePos.lng,
+        markerOnMap: map.hasLayer(playerMarker),
+      });
+    }
   }
 
   // Public method to recalibrate if needed
@@ -563,14 +499,13 @@ class MovementManager {
 
     // Validate and set initial movement type
     if (movementParam === "geolocation") {
-      // Check if geolocation is actually available before defaulting to it
+      // Check if geolocation is actually available
       if (navigator.geolocation) {
         initialMovementType = "geolocation";
       } else {
         console.warn(
           "Geolocation requested via URL but not available in browser",
         );
-        // Stay with buttons as default
       }
     } else if (movementParam && movementParam !== "buttons") {
       console.warn(
@@ -681,7 +616,6 @@ class MovementManager {
       // Remove parameter if using default
       url.searchParams.delete("movement");
     } else {
-      // Set parameter for non-default types
       url.searchParams.set("movement", movementType);
     }
 
@@ -771,7 +705,7 @@ class MovementManager {
       instructionsElement.innerHTML = `
         <div style="margin: 10px 0; padding: 10px; background: #e3f2fd; border-radius: 4px; border-left: 4px solid #2196F3;">
           <p style="margin: 0; font-size: 0.9em; color: #1565C0;">
-            <strong>🎯 Geolocation Active</strong><br>
+            <strong>Geolocation Active</strong><br>
             Move around in the real world to navigate the map. 
             The game will follow your physical location.
           </p>
@@ -781,7 +715,7 @@ class MovementManager {
       instructionsElement.innerHTML = `
         <div style="margin: 10px 0; padding: 10px; background: #e8f5e8; border-radius: 4px; border-left: 4px solid #4CAF50;">
           <p style="margin: 0; font-size: 0.9em; color: #2e7d32;">
-            <strong>🎮 Button Controls Active</strong><br>
+            <strong>Button Controls Active</strong><br>
             Use the directional buttons above to navigate the map.
           </p>
         </div>
@@ -1008,21 +942,6 @@ function cellToKey(i: number, j: number): CellKey {
 
 function cellDistance(cell1: CellCoordinates, cell2: CellCoordinates): number {
   return Math.max(Math.abs(cell1.i - cell2.i), Math.abs(cell1.j - cell2.j));
-}
-
-function _getCellsInRadius(
-  center: CellCoordinates,
-  radius: number,
-): CellCoordinates[] {
-  const cells: CellCoordinates[] = [];
-  for (let i = center.i - radius; i <= center.i + radius; i++) {
-    for (let j = center.j - radius; j <= center.j + radius; j++) {
-      if (cellDistance(center, { i, j }) <= radius) {
-        cells.push({ i, j });
-      }
-    }
-  }
-  return cells;
 }
 
 // =============================================
@@ -1258,7 +1177,7 @@ function showMemoryStats(): void {
   const memorySaved = estimatedMemoryWithoutFlyweight -
     estimatedMemoryWithFlyweight;
 
-  let infoHTML = `
+  const infoHTML = `
     <p><strong>Memory Statistics</strong></p>
     <table style="width: 100%; border-collapse: collapse;">
       <tr><td style="padding: 4px; border-bottom: 1px solid #ccc;">Active Cells:</td><td style="padding: 4px; border-bottom: 1px solid #ccc;">${totalCells}</td></tr>
@@ -1273,31 +1192,7 @@ function showMemoryStats(): void {
     </table>
   `;
 
-  infoHTML += `<p><strong>Flyweight Pattern Benefits:</strong></p>`;
-  infoHTML += `<ul>`;
-  infoHTML += `<li>Shared coordinate objects reduce memory usage</li>`;
-  infoHTML += `<li>Only modified cells require persistent storage</li>`;
-  infoHTML += `<li>Unmodified cells remain stateless and lightweight</li>`;
-  infoHTML += `<li>Automatic state preservation for modified cells</li>`;
-  infoHTML += `</ul>`;
-
   debugInfo.innerHTML = infoHTML;
-}
-
-function logMemoryStats(): void {
-  const totalCells = activeCells.size;
-  const modifiedCells =
-    Array.from(activeCells.values()).filter((cell) => cell.isModified).length;
-  const flyweightObjects = _cellFlyweightFactory.getFlyweightCount();
-
-  console.log(`=== Memory Statistics ===`);
-  console.log(`Active Cells: ${totalCells}`);
-  console.log(`Modified Cells: ${modifiedCells}`);
-  console.log(`Flyweight Objects: ${flyweightObjects}`);
-  console.log(
-    `Memory Efficiency: ${((flyweightObjects / totalCells) * 100).toFixed(1)}%`,
-  );
-  console.log(`=========================`);
 }
 
 // =============================================
@@ -1687,7 +1582,6 @@ function setupMovementControls(): void {
   setupMoveButton("moveEast", "east");
   setupMoveButton("moveWest", "west");
 
-  // Center button special handling
   const centerButton = get("moveCenter");
   centerButton.addEventListener("click", () => {
     if (movementManager.getCurrentMovementType() === "buttons") {
@@ -1699,7 +1593,6 @@ function setupMovementControls(): void {
     }
   });
 
-  // Movement toggle with enhanced feedback
   const toggleButton = get("movementToggle");
   toggleButton.addEventListener("click", toggleMovementType);
 
@@ -2056,7 +1949,7 @@ async function initializeGame() {
   await movementManager.initialize();
 
   setupMovementControls();
-  addNewGameControls(); // Add new game controls
+  addNewGameControls();
   addDebugControls();
   cleanupAllCells();
   updateCellVisibility();
@@ -2069,8 +1962,6 @@ async function initializeGame() {
   setInterval(() => {
     gamePersistence.saveGameState();
   }, 30000);
-
-  setTimeout(logMemoryStats, 1000);
 }
 
 initializeGame();
